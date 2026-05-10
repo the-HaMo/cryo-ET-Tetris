@@ -1,0 +1,148 @@
+% !TeX document-id = {c6282027-a510-40f1-b05e-2f558a6cd3f1}
+% !TeX program = xelatex
+% !TeX TXS-program:compile = txs:///xelatex/[--shell-escape]
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Plantilla TFG/TFM
+% Universidad de Murcia. Facultad de Informática
+% Realizado por: José Manuel Requena Plens
+% Modificado: Pablo José Rocamora Zamora
+% Contacto: pablojoserocamora@gmail.com
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+% Archivo .TEX que incluye todas las configuraciones del documento y los paquetes. Añade todo aquello que necesites utilizar en el documento en este archivo.
+% En él se encuentra la configuración de los márgenes, establecidos según las directrices de estilo de la EPS.
+\input{include/configuracioninicial}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% INFORMACIÓN DEL TFG
+% Comentar lo que NO se desee añadir y sustituir con la información correcta.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Título y subtítulo
+\newcommand{\titulo}{Accelerating protein insertion for synthetic data generation in Cryo-Electron Tomography}
+\newcommand{\subtitulo}{Performance optimization for the PolNet simulation framework}
+% Datos del autor
+\newcommand{\miNombre}{Mohammed Amrou Labied Nasser}
+\newcommand{\miDNI}{49857930W}
+\newcommand{\miEmail}{ma.labiednasser@um.es}
+% Datos del tutor/es
+\newcommand{\miTutor}{Antonio Martínez Sánchez}
+\newcommand{\miTutorB}{Juan Diego Gallego Nicolás}
+\newcommand{\departamentoTutor}{Ingeniería de la Información y las Comunicaciones}
+% Datos de la facultada y universidad
+\newcommand{\miFacultad}{Facultad de Informática}
+\newcommand{\miFacultadCorto}{FIUM}
+\newcommand{\miUniversidad}{\protect{Universidad de Murcia}}
+\newcommand{\miUbicacion}{Murcia}
+\newcommand{\firma}{include/firma}
+
+% Configuración automática según el identificador elegido
+% Grados
+\definecolor{informatica}{RGB}{121,11,21}	% Informatica
+% Colores generales
+\definecolor{negro}{RGB}{0,0,0}
+\definecolor{blanco}{RGB}{255,255,255}
+
+% Logotipos comunes de todas las titulaciones
+\newcommand{\logoFacultadPortada}{include/logos-titulaciones/Simbolo-negativo-sin-fondo}
+\newcommand{\logoGradoPortada}{include/logos-titulaciones/Simbolo-negativo-sin-fondo} 
+\newcommand{\logoUniversidadPortada}{include/logos-universidad/escudo_umu}
+\newcommand{\logoFacultadPortadaBaja}{include/logos-titulaciones/FIUM-postivo-sin-fondo}
+% Logos
+\newcommand{\logoGrado}{include/logos-titulaciones/FI-positivo}
+\newcommand{\logoDepartamento}{include/logos-titulaciones/Logotipo_DIIC}
+\newcommand{\logoUniversidad}{include/logos-universidad/um}
+% Texto
+\newcommand{\miGrado}{Grado en Ingeniería Informática}
+\newcommand{\tipotrabajo}{Trabajo Fin de Grado}
+% Color
+\newcommand{\colorgrado}{informatica}
+\newcommand{\colortexto}{blanco}
+
+% Información añadida a las propiedades del archivo PDF.
+\hypersetup{
+	pdfauthor = {\miNombre~(\miEmail)},
+	pdftitle = {\titulo},
+}
+
+%%
+% Archivo de acrónimos
+%%
+\makeglossaries % Genera la base de datos de acrónimos
+\input{anexos/_acronimos.tex} % Archivo que contiene los acrónimos
+
+%%%%%%%%%%%%%%%%%%%%%%%% 
+% INICIO DEL DOCUMENTO
+% A partir de aquí debes empezar a realizar tu TFG/TFM
+%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+	
+	% Números romanos hasta el mainmatter.
+	% \frontmatter
+	\raggedbottom
+    \setlength{\parindent}{1.5em} % Ajusta el tamaño de la sangría
+	% PORTADA
+	\input{include/portada/portada_color} % Portada Color
+	\input{include/portada/portada_bn} % Portada B/N
+	
+	%%%%% PREAMBULO
+	% Incluye el .tex que contiene el preámbulo, agradecimientos y dedicatorias.
+	%\setstretch{1.5} % 1.5 línea de interlineado antes esta a 1 para la portada
+	\input{preambulos/preliminaresconagradecimientos}
+	\input{preambulos/2_resumen}
+	\input{preambulos/3_extended_abstract}
+	
+	%\setstretch{1.0} % 1.0 línea de interlineado para los indices
+	% Incluye después del archivo anterior el indice y lista de figuras, tablas y códigos.
+
+	\tableofcontents     	% Índice
+	\listoffigures	     	% Índice de figuras
+	% \listoftables	     	% Índice de tablas
+	% \lstlistoflistings 	    % Índice de códigos
+	
+	% Inicia la numeración habitual.
+	% \mainmatter
+	
+	%\setstretch{1.5} % 1.5 línea de interlineado
+	
+	%%%%
+	% CONTENIDO. CAPÍTULOS DEL TRABAJO - Añade o elimina según tus necesidades
+	%%%%
+	\input{capitulos/1_introduccion}
+	\input{capitulos/2_estado_arte}
+	\input{capitulos/3_analisis}
+	\input{capitulos/4_diseno}
+	\input{capitulos/5_conclusiones}
+	%\input{capitulos/_introduccion}		% Plantilla: Se muestran contenidos
+	%\input{capitulos/_marcoteorico}		% Plantilla: Se muestran listas
+	%\input{capitulos/_objetivos}		% Plantilla: Se muestran tablas
+	%\input{capitulos/_metodologia}		% Plantilla: Se muestran figuras
+	%\input{capitulos/_desarrollo}		% Plantilla: Se muestran listados
+	%\input{capitulos/_resultados}		% Plantilla: Se muestran gráficas
+	%\input{capitulos/_conclusiones}		% Plantilla: Se muestran matemáticas
+	
+	%%%%
+	% CONTENIDO. BIBLIOGRAFÍA.
+	%%%%
+	\nocite{*} %incluye TODOS los documentos de la base de datos bibliográfica sean o no citados en el texto
+	\bibliographystyle{unsrtnat}
+	\bibliography{bibliografia/bibliografia} % Archivo que contiene la bibliografía
+	
+	
+	%%%%
+	% CONTENIDO. LISTA DE ACRÓNIMOS. Comenta las líneas si no lo deseas incluir.
+	%%%%
+	% Incluye el listado de acrónimos utilizados en el trabajo. 
+	% printglossary[style=modsuper,type=\acronymtype,title={Lista de Acrónimos y Abreviaturas}]
+	% Añade el resto de acrónimos si así se desea. Si no elimina el comando siguiente
+	% \glsaddallunused
+	
+	%%%%
+	% CONTENIDO. Anexos - Añade o elimina según tus necesidades
+	%%%%
+	\appendix % Inicio de los apéndices
+	\input{anexos/_anexo_I}
+	% \input{anexos/_anexo_2}
+	% \input{anexos/_anexo_3}
+	
+\end{document}

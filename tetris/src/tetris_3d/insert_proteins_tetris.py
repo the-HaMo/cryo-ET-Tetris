@@ -19,15 +19,15 @@ MEMBRANE_FILES = [
 PROTEINS_LIST = [
     # "in_10A/4v4r_10A.pns",
     # "in_10A/3j9i_10A.pns",
-    # "in_10A/5mrc_10A.pns",
+    "in_10A/5mrc_10A.pns",
     # "in_10A/4v7r_10A.pns",
     "in_10A/2uv8_10A.pns",
     # "in_10A/4v94_10A.pns",
-    # "in_10A/4cr2_10A.pns",
-    # "in_10A/3qm1_10A.pns",
-    # "in_10A/3h84_10A.pns",
-    # "in_10A/3gl1_10A.pns",
-    # "in_10A/3d2f_10A.pns",
+    "in_10A/4cr2_10A.pns",
+    "in_10A/3qm1_10A.pns",
+    "in_10A/3h84_10A.pns",
+    "in_10A/3gl1_10A.pns",
+    "in_10A/3d2f_10A.pns",
     # "in_10A/3cf3_10A.pns",
     # "in_10A/2cg9_10A.pns",
     # "in_10A/1u6g_10A.pns",
@@ -43,11 +43,11 @@ VOI_VSIZE = 10
 TRIES_CLUSTERING = 10
 
 def sorted_proteinSizes(proteins_list):
-    return sorted(
-        proteins_list,
-        key=lambda x: Parser3D.load_protein(str(ROOT_PATH / x), str(ROOT_PATH))[0].shape[0],
-        reverse=True
-    )
+    def internal_occupancy(p_path):
+        vol, _ = Parser3D.load_protein(str(ROOT_PATH / p_path), str(ROOT_PATH))
+        threshold = vol.max() * PROTEIN_ISO_THRESHOLD_RATIO
+        return np.count_nonzero(vol > threshold) / vol.size
+    return sorted(proteins_list, key=internal_occupancy, reverse=True)
 
 def crop_volume(vol, threshold):
     """densidad real de la proteína"""

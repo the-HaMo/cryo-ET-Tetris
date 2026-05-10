@@ -60,18 +60,16 @@ DEBUG_OCCUPANCY = True
 np.random.seed(42)
 
 def sorted_proteinSizes(proteins_list):
-    def protein_size(protein_path):
+    def internal_occupancy(protein_path):
         params = PnFile().load(ROOT_PATH / protein_path)
         mmer_path = params["MMER_SVOL"]
         if mmer_path.startswith("/"):
             mmer_path = "." + mmer_path
-        return np.prod(lio.load_mrc(str(ROOT_PATH / mmer_path)).shape)
+        vol = lio.load_mrc(str(ROOT_PATH / mmer_path))
+        threshold = vol.max() * PROTEIN_ISO_THRESHOLD_RATIO
+        return np.count_nonzero(vol > threshold) / vol.size
 
-    return sorted(
-        proteins_list,
-        key=protein_size,
-        reverse=True
-    )
+    return sorted(proteins_list, key=internal_occupancy, reverse=True)
 
 
 def add_uniform_poly_labels(poly, entity_id, type_id):

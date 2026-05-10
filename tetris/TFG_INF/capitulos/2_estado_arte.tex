@@ -1,0 +1,325 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Plantilla TFG/TFM
+% Universidad de Murcia. Facultad de Informática
+% Realizado por: José Manuel Requena Plens
+% Modificado: Pablo José Rocamora Zamora
+% Contacto: pablojoserocamora@gmail.com
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\chapter{Estado del arte}
+
+\section{Contexto: Criomicroscopía Electrónica de Tomografía (Cryo-ET)}
+La Criomicroscopía Electrónica de Tomografía (Cryo-ET) se ha consolidado como la técnica diagnóstica por excelencia para la observación de macromoléculas biológicas en su estado nativo. A diferencia de la cristalografía de rayos X, esta técnica permite visualizar el interior celular sin necesidad de cristalización o purificación previa de las muestras.
+
+\subsection{Fundamentos y adquisición de datos}
+El origen de la microscopía electrónica de transmisión (TEM) se remonta a 1931, con el desarrollo del primer prototipo por Max Knoll y Ernst Ruska, hito que le valdría a este último el Premio Nobel de Física en 1986. Sin embargo, la aplicación de esta técnica a muestras biológicas enfrentó inicialmente un obstáculo crítico: el daño por radiación. El haz de electrones de alta energía necesario para la obtención de imágenes provoca procesos de excitación molecular e ionización que destruyen las delicadas estructuras orgánicas\footnote{Esto se debe al bajo número atómico de los elementos que componen la materia orgánica (principalmente hidrógeno, carbono y oxígeno, etc), los cuales presentan una alta sensibilidad a la radiólisis y un bajo contraste intrínseco bajo el haz de electrones.}. No fue hasta la década de 1980 cuando el desarrollo de métodos de vitrificación por Jacques Dubochet permitió preservar las muestras en condiciones nativas.\\
+
+La vitrificación es la piedra angular de la criomicroscopía moderna. Este proceso consiste en la congelación ultrarrápida de la muestra biológica, generalmente mediante su inmersión en etano líquido a temperaturas criogénicas. La velocidad del enfriamiento impide que las moléculas de agua se organicen en una estructura cristalina hexagonal, la cual expandiría su volumen y rompería las membranas celulares y complejos proteicos. En su lugar, el agua alcanza un estado sólido amorfo o vítreo, actuando como un soporte transparente a los electrones que inmoviliza y protege la estructura tridimensional de las macromoléculas.\\
+
+A diferencia de la criomicroscopía electrónica convencional (cryo-EM), que suele centrarse en el análisis \textit{in vitro} de partículas purificadas, la Criomicroscopía Electrónica de Tomografía (cryo-ET) permite el estudio de las muestras \textit{in situ}. Esto significa que es posible visualizar macromoléculas como complejos proteicos, filamentos y membranas biológicas dentro de su contexto celular original y a una resolución sub-nanométrica.\\
+
+La adquisición de datos en cryo-ET se basa en la generación de una \textbf{serie de inclinación} (\textit{tilt-series}). Dado que el microscopio produce proyecciones bidimensionales (2D) de la densidad electrónica, es necesario rotar la muestra de forma incremental —típicamente de $1^\circ$ en $1^\circ$ o de $2^\circ$ en $2^\circ$— dentro de un rango limitado, que habitualmente oscila entre los $-60^\circ$ y $+60^\circ$. Este rango se ve restringido por limitaciones mecánicas del portaobjetos y por el incremento del grosor efectivo que el haz de electrones debe atravesar en ángulos extremos, lo que reduce drásticamente la transmisión de señal.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{archivos/haz.png}
+    \caption{La cryo-ET consiste en capturar proyecciones mediante la inclinación de la muestra ($\pm60^{\circ}$) para su posterior reconstrucción en un tomograma tridimensional.}
+    \label{fig:tilt-series}
+\end{figure}
+
+Finalmente, las proyecciones alineadas se procesan computacionalmente mediante algoritmos de reconstrucción matemática, siendo la Retroproyección Ponderada (\textit{Weighted Back-projection}, WBP) y los métodos iterativos como SIRT los más utilizados. El resultado es un \textbf{tomograma}: un volumen tridimensional compuesto por una rejilla de vóxeles que codifican la densidad electrónica local. Estos volúmenes se almacenan habitualmente en formato MRC, el cual permite gestionar grandes matrices de datos (por ejemplo, de $500\times500\times250$ vóxeles) y metadatos críticos como el tamaño de vóxel en 10\AA, parámetros fundamentales para la posterior inserción precisa de proteínas.
+
+
+\subsection{Limitaciones: Ruido y el problema del Missing Wedge}
+
+La Cryo-ET enfrenta desafíos físicos severos que condicionan de manera crítica la calidad, la resolución y la interpretación del volumen reconstruido. El primero de estos obstáculos es la \textbf{baja relación señal-ruido (SNR)}, una consecuencia directa de la extrema sensibilidad de las muestras biológicas al daño por radiación ionizante. Debido a que dosis elevadas de electrones provocarían la degradación estructural de la muestra y la rotura de enlaces químicos (radiólisis), la dosis acumulada durante toda la serie de inclinación debe mantenerse en niveles mínimos. Esto resulta en tomogramas con un contraste muy pobre donde las densidades electrónicas de las macromoléculas suelen quedar sepultadas bajo un ruido estocástico dominante, dificultando enormemente tanto la identificación visual por expertos como la eficacia de algoritmos de segmentación convencionales.\\
+
+El segundo gran desafío técnico es el fenómeno denominado \textbf{Missing Wedge}. Debido a restricciones mecánicas del portaobjetos dentro de la columna del microscopio y al incremento exponencial del grosor efectivo de la muestra en ángulos extremos ($d/\cos \theta$), no es posible capturar proyecciones en el rango completo de $180^\circ$, limitándose habitualmente a un arco de $\pm60^\circ$. En el espacio de Fourier, esta falta de datos se traduce en una región con forma de cuña sin muestrear, lo que impide una reconstrucción isotrópica de la muestra. El efecto visual resultante es una distorsión geométrica característica: las estructuras aparecen significativamente elongadas en el eje vertical ($Z$) y las membranas u orgánulos orientados paralelamente al haz de electrones presentan una pérdida de resolución tan severa que pueden llegar a ser invisibles en el tomograma final.\\
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{archivos/missingWedge.png}
+    \caption{Esquema de adquisición y espacio de Fourier con la cuña faltante (MW) y cuñas secundarias (BMW) que limitan la resolución vertical del tomograma.}
+    \label{fig:missing-wedge}
+\end{figure}
+
+Estos factores —el ruido masivo y las distorsiones del Missing Wedge— introducen artefactos y borrosidad direccional que comprometen la fidelidad de la información biológica capturada. Esta degradación intrínseca de los datos reales hace imprescindible el uso de simuladores avanzados para generar entornos sintéticos con un etiquetado conocido. Al disponer de volúmenes donde la posición, geometría y orientación de cada elemento están definidas con precisión absoluta, es posible entrenar redes neuronales profundas (CNNs) que aprendan a reconocer patrones complejos, compensar las anisotropías geométricas y extraer señales coherentes en tomogramas reales altamente degradados.
+
+\section{Simulación de tomogramas mediante PolNet}
+La generación de datos sintéticos se ha consolidado como una estrategia fundamental para mitigar las limitaciones intrínsecas al análisis de tomogramas reales. Mediante el uso de herramientas de simulación, es posible recrear digitalmente el entorno celular y emular los efectos ópticos del microscopio, produciendo volúmenes tridimensionales donde existe un control exhaustivo sobre las variables biológicas y los parámetros de degradación computacional.
+
+\subsection{Datos sintéticos}
+El motivo principal por el cual se evita el uso de datos experimentales reales como base exclusiva de entrenamiento para algoritmos de segmentación radica en las severas deficiencias inherentes a estas muestras. En Cryo-ET, una imagen real no constituye una representación fiel de la estructura biológica, sino una señal extremadamente degradada por el ruido y los condicionantes físicos del microscopio. Factores como la baja relación señal-ruido (SNR) y el artefacto del \textit{Missing Wedge} generan un entorno donde la frontera entre la estructura de interés y el ruido de fondo resulta difusa y ambigua.\\
+
+Por tanto, el empleo de entornos simulados resulta fundamental por los siguientes factores críticos:
+
+\begin{itemize}
+    \item \textbf{Obtención de un \textit{Ground Truth} determinista:} En tomogramas reales, la anotación manual es un proceso extremadamente lento, costoso y propenso a errores. Al no existir una visualización clara, la segmentación depende de interpretaciones subjetivas que introducen sesgos; si el modelo se entrena con estas imprecisiones, el algoritmo heredará dichos errores. Por el contrario, los conjuntos de datos sintéticos permiten definir explícitamente la posición, orientación y geometría de cada estructura con precisión a nivel de vóxel. Esta ``verdad absoluta'' o etiquetado perfecto garantiza que el modelo aprenda sobre una base geométrica exacta.
+    
+    \item \textbf{Escalabilidad y eficiencia:} El entrenamiento robusto de redes neuronales profundas requiere miles de ejemplos etiquetados. Generar, vitrificar y anotar manualmente tal volumen de muestras reales es un proceso inasumible en términos de tiempo y recursos especializados. Los datos sintéticos permiten producir masivamente volúmenes etiquetados de forma automatizada y bajo condiciones controladas.
+
+    \item \textbf{Aislamiento de variables y validación de robustez:} La simulación permite modelar de forma independiente fenómenos como el \textit{Missing Wedge} o diferentes niveles de SNR. Esta capacidad de parametrización es clave para evaluar la robustez y resiliencia de los modelos de segmentación ante degradaciones específicas, permitiendo optimizar el algoritmo antes de su aplicación en escenarios experimentales reales de alta complejidad.
+\end{itemize}
+
+\subsection{Arquitectura del framework PolNet}
+PolNet es un framework de código abierto para la generación de tomodensigramas sintéticos de cryo-ET. Recibe especificaciones de estructuras biológicas como entrada y genera volúmenes 3D voxelizados con etiquetas como salida, proporcionando un conjunto de datos controlado y reproducible para el entrenamiento de modelos de aprendizaje profundo.
+
+\subsubsection{Inputs}
+
+Los inputs del framework son archivos de especificación que describen las estructuras biológicas a incluir:
+
+\begin{itemize}
+    \item \textbf{Membranas (.mbs)}: Definen la geometría de las membranas (por ejemplo, esferas, toroides o elipsoides) y su distribución general en el volumen. En la práctica, establecen el contexto estructural donde se ubicarán el resto de componentes biológicos.
+    \item \textbf{Proteínas solubles (.pns)}: Especifican proteínas presentes en el citosol, es decir, no ancladas a membrana. Permiten controlar qué proteínas aparecen, su densidad aproximada y su organización espacial dentro del volumen.
+    \item \textbf{Proteínas de membrana (.pms)}: Describen proteínas asociadas a superficies membranales. Son útiles para simular escenarios más realistas en los que ciertas macromoléculas se localizan preferentemente en membranas y no en el citosol libre.
+    \item \textbf{Filamentos (.hns)}: Definen estructuras filamentosas como actina o microtúbulos, incorporando componentes del citoesqueleto. Su inclusión incrementa la complejidad estructural del tomograma y mejora el realismo del entorno celular.
+    \item \textbf{Configuración (config.yaml)}: Reúne parámetros globales de generación, como tamaño del volumen, resolución (tamaño de voxel), número de tomogramas o semilla aleatoria. Estos valores determinan la escala del experimento y su reproducibilidad.
+\end{itemize}
+
+\subsubsection{Outputs}
+
+El framework genera los siguientes archivos para cada tomograma:
+
+\begin{itemize}
+    \item \textbf{Volúmenes MRC}: Se generan principalmente dos volúmenes en formato estándar de cryo-ET: \texttt{tomo\_XXX\_den.mrc} (densidad electrónica simulada) y el mapa de etiquetas \texttt{tomo\_XXX\_lbl.mrc}. El primero se usa como entrada para tareas de análisis; el segundo como referencia para validación y entrenamiento supervisado.
+    \item \textbf{Archivos de visualización (VTP)}: Incluyen representaciones geométricas de las estructuras insertadas, pensadas para inspección cualitativa y control visual de la generación. Son especialmente útiles para verificar si la distribución espacial de componentes es coherente con el escenario biológico deseado.
+    \item \textbf{Tabla de mapeo (CSV)}: Relaciona cada tipo de estructura o archivo de entrada con sus etiquetas en el volumen. Facilita la trazabilidad entre configuración inicial y resultado final, algo clave para análisis cuantitativo y documentación experimental.
+\end{itemize}
+
+Estos outputs permiten entrenar modelos de segmentación automática y analizar la distribución de estructuras biológicas en el tomograma.
+
+\subsection{Inserción de proteínas solubles a través Self-Avoiding Worm-Like Chain (SAWLC)}
+
+La inserción de proteínas solubles en PolNet se fundamenta en el modelo estocástico \textit{Self-Avoiding Worm-Like Chain} (SAWLC). Este algoritmo permite simular macromoléculas citosólicas como {cadenas poliméricas}\footnote{una cadena polimérica se entiende como un conjunto de monómeros conectados espacialmente.} discretas que mantienen una continuidad geométrica y evitan colisiones físicas mediante restricciones espaciales. A nivel computacional, el modelo SAWLC no realiza una simulación dinámica molecular, sino que actúa como un generador de configuraciones estocásticas basadas en el muestreo de posiciones y orientaciones plausibles.
+
+
+\subsubsection{Fundamentos del modelo SAWLC}
+
+SAWLC se emplea como un modelo generativo mesoscópico para construir configuraciones de proteínas solubles espacialmente plausibles bajo restricciones geométricas. El problema que se quiere resolver no es solo \textit{insertar proteínas}, sino insertarlas con una organización espacial realista e intentando llegar a un grado de ocupación alto. Una colocación uniforme o completamente aleatoria puede generar mapas de densidad poco realistas, con discontinuidades y patrones de empaquetamiento que no reflejan bien la estructura local del medio celular. Por este motivo, se utiliza SAWLC como estrategia intermedia entre dos extremos: la aleatoriedad sin restricciones y la simulación físico-molecular completa.\\
+
+Formalmente, cada macromolécula $M_i$ del clúster se posiciona de forma aleatoria dentro de un conjunto de puntos candidatos $C_i$, definido por la intersección de una esfera de búsqueda y el volumen permitido:
+
+\begin{equation}
+C_i = S(x_{i-1}, d_i) \cap V
+\end{equation}
+
+Donde $x_{i-1}$ es la posición de la macromolécula anterior, $d_i$ es la distancia de enlace (\textit{link length}) y $S(x_{i-1}, d_i)$ representa una esfera centrada en $x_{i-1}$ con radio $d_i$. Esta operación se traduce en el código mediante un muestreo uniforme en una superficie esférica $S^2$:
+
+\begin{equation}
+x_i = x_{i-1} + t_i, \quad t_i \in S^2 \subset \mathbb{R}^3, \quad |t_i| = d_i
+\end{equation}
+
+Para asegurar una distribución estocástica de las orientaciones, cada monómero incorpora una rotación representada por un cuaternión unitario $q_i$ en el espacio $SO(3)$. La validez geométrica del paso $i$ está condicionada por una función de colisión $C(M_i, S)$, donde el monómero es aceptado si el solapamiento con el resto de la red y el volumen no supera la tolerancia $\epsilon$ permitida:
+
+\begin{equation}
+C(M_i, \text{VOI} \cup {M_1, \dots, M_{i-1}}) \leq \epsilon
+\end{equation}
+
+La ventaja principal de SAWLC es que impone continuidad geométrica y auto-evitación durante el crecimiento de cada cadena, lo que mejora el realismo estructural de los datos sintéticos sin perder control experimental.Además, el modelo soporta clústeres heterogéneos compuestos por $J$ tipos distintos de macromoléculas, permitiendo simular entornos citosólicos complejos. En términos prácticos, permite regular la densidad y longitud mediante parámetros explícitos, manteniendo la reproducibilidad mediante el uso de una semilla aleatoria.Por tanto, SAWLC se adopta aquí como un \textbf{modelo generativo orientado a la plausibilidad geométrica}: no pretende reproducir toda la dinámica biofísica de las proteínas, pero sí generar configuraciones suficientemente realistas y controlables para tareas de entrenamiento y validación de algoritmos de segmentación en criotomografía electrónica.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{archivos/sawlc_schema.png}
+    \caption{Esquema del algoritmo SAWLC: Muestreo de semilla, Crecimiento válido, Detección de colisión y Reintento/Finalización por congestión espacial.}
+    \label{fig:sawlc-schema}
+\end{figure}
+ 
+\subsubsection{Parámetros del algoritmo}
+
+Para describir el comportamiento del método y su control sobre la densidad y organización del clúster, los parámetros más relevantes definidos en la implementación de PolNet son:
+
+\begin{itemize}
+    \item $\rho^*$: Grado de ocupación objetivo, definido como el porcentaje del volumen del VOI que debe ser cubierto por las macromoléculas.
+    \item $L_{max}$: Longitud máxima de la cadena, que limita el número de unidades estructurales (monómeros) por cada polímero generado.
+    \item $d_i$: Distancia de enlace (\textit{link length}) entre monómeros consecutivos, que determina el radio de la esfera de muestreo $S(x_{i-1}, d_i)$.
+    \item $T_c$: Número máximo de intentos para localizar una semilla inicial válida ($x_0$) dentro del volumen libre.
+    \item $T_m$: Número máximo de intentos para proponer una extensión de la cadena ($x_i$) antes de dar por finalizado el crecimiento del polímero actual.
+    \item $\epsilon$: Tolerancia de solapamiento (\textit{over\_tolerance}), definida como la fracción [0, 1] de puntos de la superficie del monómero permitidos dentro de otra estructura.
+    \item $J$: Número de tipos distintos de macromoléculas ($M_j$) que pueden conformar un clúster heterogéneo.
+    \item $v_{size}$: Tamaño del vóxel del volumen, parámetro crítico para la discretización de las mallas y la validación en el VOI.
+\end{itemize}
+
+\subsubsection{Pseudocódigo}
+
+\begin{algorithm}[H]
+    \caption{Inserción de proteínas solubles mediante SAWLC}
+    \label{alg:sawlc_tecnico}
+    \KwIn{VOI ($V$), Proteínas ($P$), $\rho^*, L_{max}, d_i, T_c, T_m, \epsilon, J, v_{size}$}
+    \KwOut{Distribución final de polímeros y ocupación actualizada $\rho$}
+
+    Inicializar estado del volumen y ocupación actual $\rho \gets 0$\;
+
+    \While{$\rho < \rho^*$}{
+        $intentos\_c \gets 0$\;
+        \While{$intentos\_c < T_c$}{
+            $x_0 \gets$ muestrear\_semilla\_valida($V, v_{size}$)\;
+            \If{$x_0$ es válida}{
+                $C \gets$ inicializar\_cadena($x_0, P_j$)\;
+                \For{$i = 1 \dots L_{max}$}{
+                    $intentos\_m \gets 0$\;
+                    \While{$intentos\_m < T_m$}{
+                        Proponer $x_i \in S(x_{i-1}, d_i) \cap V$\;
+                        $q_i \gets$ gen\_cuaternion\_aleatorio()\;
+                        \If{validar\_colision($M_i, \rho, \epsilon, v_{size}$)}{
+                            Aceptar monómero e insertar en $C$\;
+                            Actualizar ocupación $\rho$\;
+                            \textbf{break}\;
+                        }
+                        $intentos\_m \gets intentos\_m + 1$\;
+                    }
+                    \If{$intentos\_m == T_m$ o $\rho \ge \rho^*$}{\textbf{break}\;}
+                }
+                \textbf{break} \tcp*{Cadena completada o detenida}
+            }
+            $intentos\_c \gets intentos\_c + 1$\;
+        }
+        \If{$intentos\_c == T_c$}{\textbf{break} \tcp*{Saturación del volumen}}
+    }
+    \Return Distribución de polímeros y $\rho$\;
+\end{algorithm}
+
+\subsubsection{Análisis de complejidad y orden de magnitud}
+
+El coste computacional del algoritmo SAWLC no depende exclusivamente del número de proteínas finalmente insertadas, sino del volumen total de intentos, tanto exitosos como fallidos, necesarios para intentar alcanzar la ocupación objetivo $\rho^*$. Basándose en el flujo lógico de los bucles de control implementados, el coste teórico se expresa mediante la siguiente relación de complejidad:
+
+\[
+O(T_c \cdot L_{max} \cdot T_m \cdot C_{val})
+\]
+
+En esta expresión, el componente crítico es el factor de validación $C_{val}$, que representa el coste de verificar la ausencia de colisiones mediante {mallas de superficie}\footnote{En el contexto de PolNet, una malla de superficie (\textit{surface mesh}) es una representación discreta de la frontera exterior de una macromolécula mediante un objeto de tipo \texttt{vtkPolyData}.}. A diferencia de los parámetros de control definidos anteriormente, este coste es dinámico y depende de la resolución de la malla ($N_{puntos}$) y del número de objetos ya presentes en el volumen, lo que obliga al algoritmo a realizar comprobaciones geométricas más costosas conforme el sistema se densifica.
+
+\paragraph{Comportamiento según el grado de ocupación}
+
+El coste real presenta una fuerte dependencia no lineal con respecto a la ocupación actual $\rho$:
+
+\begin{itemize}
+    \item \textbf{Régimen de baja densidad ($\rho \ll \rho^*$):} La probabilidad de colisión es mínima, permitiendo que la mayoría de las propuestas se acepten en el primer intento. En esta fase, el comportamiento es cuasi-lineal respecto al número de monómeros insertados.
+    \item \textbf{Régimen de congestión molecular (\textit{crowding}):} A medida que el espacio libre se fragmenta, la probabilidad de que una propuesta estocástica $x_i$ sea válida disminuye exponencialmente. En este escenario, el sistema agota sistemáticamente los umbrales de reintento $T_m$ y $T_c$.
+\end{itemize}
+
+Por tanto, el cuello de botella computacional de SAWLC reside en el procesamiento de los intentos fallidos, donde el sistema invierte recursos significativos en validaciones geométricas de candidatos que finalmente son rechazados por colisión.
+
+\subsubsection{Limitaciones del modelo SAWLC}
+
+Aunque el método SAWLC es eficaz para generar entornos macromoleculares con continuidad estructural, presenta restricciones técnicas intrínsecas que condicionan su rendimiento en escenarios de alta densidad:
+
+\begin{itemize}
+    \item \textbf{Dependencia multivariante y ajuste empírico:} El éxito de la simulación está sujeto a una interdependencia compleja entre parámetros como la tolerancia de solapamiento ($\epsilon$), la longitud de enlace ($d_i$) y los umbrales de reintento ($T_c, T_m$). La falta de un modelo analítico para predecir la convergencia obliga a un ajuste empírico laborioso para cada tipo de proteína y ocupación objetivo.
+    
+    \item \textbf{Saturación por fragmentación del espacio libre:} El algoritmo no garantiza alcanzar la ocupación máxima teórica ($\rho^*$). Debido a su naturaleza de crecimiento secuencial y "ciego", el sistema suele quedar atrapado en configuraciones donde el espacio libre remanente es inferior al volumen del monómero o está distribuido en huecos inconexos que no permiten la extensión de la cadena.
+    
+    \item \textbf{Barrera de {entropía}\footnote{No confundir con la entropía de Shannon. En polímeros, la entropía configuracional mide el número de estados espaciales accesibles para la cadena. La ``barrera'' surge cuando la falta de huecos libres reduce estos estados, provocando que la búsqueda estocástica ($T_m$) falle sistemáticamente por pura probabilidad.} en escenarios de \textit{crowding}:} A medida que el volumen se densifica, la probabilidad de que una propuesta de extensión $x_i$ sea válida tiende a cero de forma exponencial. Esto genera un incremento masivo en el número de validaciones geométricas fallidas, provocando que el algoritmo se detenga prematuramente al agotar los intentos $T_m$, dejando el tomograma con una ocupación real significativamente inferior a la biológica.
+    
+    \item \textbf{Inconsistencia en el empaquetamiento determinista:} Al ser un proceso estocástico basado en semillas aleatorias, la organización local del clúster es altamente variable. Esta falta de control sobre la disposición espacial fina dificulta la simulación realistas.
+\end{itemize}
+
+En consecuencia, el modelo SAWLC debe entenderse como un procedimiento generativo orientado a la verosimilitud estructural más que a la eficiencia de empaquetamiento. Esta limitación computacional para obtener entornos de alta densidad molecular justifica la exploración de nuevos algoritmos que gestionen el espacio de forma determinista para maximizar la ocupación del volumen.
+
+\section{Algoritmo Tetris: Inserción de alta densidad}
+
+Para superar las limitaciones de empaquetamientos y alcanzar un mayor grado de ocupancia, surge el algoritmo \textbf{Tetris}, una técnica de gestión espacial para generar muestras tridimensionales con una alta congestión molecular (\textit{crowding}). A diferencia de los métodos de crecimiento polimérico, este algoritmo permite posicionar las proteínas de forma compacta y eficiente.
+
+\subsection{Fundamentos del modelo Tetris}
+
+El algoritmo Tetris opera bajo un principio intuitivo de optimización de proximidad: coloca las moléculas iterativamente, posicionando cada nueva unidad en la ubicación más cercana posible a las ya existentes sin producir colisiones. El proceso se basa en el procesamiento de volúmenes binarizados y el uso de operadores de correlación para identificar el espacio disponible.\\
+
+El núcleo del algoritmo reside en la creación de una \textbf{cáscara de inserción} ($in\text{-}shell$). Para cada molécula candidata $M$, se genera una versión binarizada y dilatada; al restar la versión binarizada de la dilatada, se obtiene un margen espacial que define la distancia mínima permitida respecto a otros objetos. Matemáticamente, esta guía espacial $I$ se define como:
+
+\begin{equation}
+I = \text{dilate}(\text{bin}(M), r) - (\text{bin}(M) \cdot \infty)
+\end{equation}
+
+Donde $\text{bin}(\cdot)$ es el operador de binarización, $r$ es el radio del elemento estructural de dilatación y el factor infinito asegura que el núcleo de la molécula sea una zona de colisión prohibida. La posición óptima se determina mediante la correlación ($\star$) de esta cáscara con el volumen acumulado del tomograma ($O$), generando un mapa de correlación ($c\text{-}map$) $C$:
+
+\begin{equation}
+C = I \star \text{bin}(O)
+\end{equation}
+
+Los valores positivos en este mapa indican posiciones viables, y el algoritmo selecciona sistemáticamente el índice del valor máximo $x_{opt}$ para garantizar la máxima compacidad:
+
+\begin{equation}
+x_{opt} = argmax(C)
+\end{equation}
+
+A partir de la dinámica ilustrada en la Figura \ref{fig:tetris}, el funcionamiento detallado del algoritmo se desglosa en las siguientes etapas críticas:
+
+\begin{itemize}
+    \item \textbf{Selección y rotación estocástica}: El proceso se inicia extrayendo una molécula de la base de datos de entrada (ya sea una plantilla objetivo o un distractor) y aplicándole una rotación aleatoria uniforme para asegurar que el empaquetamiento final sea isotrópico y no presente sesgos de orientación.
+    
+    \item \textbf{Tratamiento del primer ejemplar}: En la primera iteración, el objeto se sitúa automáticamente en el centro de un volumen vacío expandido, estableciendo el núcleo inicial del clúster o \textit{current output}.
+    
+    \item \textbf{Preprocesamiento y binarización}: Para las moléculas sucesivas, el sistema realiza un suavizado (\textit{smooth}) mediante filtros de paso bajo y una binarización. Este paso es fundamental para transformar la densidad electrónica compleja en una máscara geométrica de ocupación binaria.
+    
+    \item \textbf{Generación de la \textit{in-shell}}: La versión binarizada del nuevo objeto se dilata según un radio de seguridad definido por el usuario. Al restar la máscara binarizada original (multiplicada por un valor de peso infinito) de la versión dilatada, se genera la \textbf{\textit{in-shell}}. Esta estructura actúa como una guía que delimita la zona de contacto permitida: define dónde puede estar el centro de la nueva molécula para que su borde toque a las ya existentes sin llegar a solaparlas.
+    
+    \item \textbf{Análisis de viabilidad mediante el \textit{C-map}}: Se ejecuta una operación de correlación entre la \textit{in-shell} y la versión binarizada del volumen acumulado actual. El resultado es el mapa de correlación o \textbf{\textit{C-map}}, donde los valores positivos representan coordenadas de inserción válidas y los valores negativos o nulos representan posiciones de colisión o excesivamente alejadas.
+    
+    \item \textbf{Optimización de la compacidad}: El algoritmo identifica el índice que contiene el \textbf{valor máximo absoluto} dentro del \textit{C-map}. Al elegir este máximo, se garantiza que la molécula se inserte en la posición más cercana posible al clúster existente, logrando la máxima densidad molecular (\textit{highest compactness}).
+    
+    \item \textbf{Saturación y fin del proceso}: El ciclo continúa actualizando la salida (\textit{update output}) hasta que el \textit{C-map} resultante es completamente negativo. Esto indica que el espacio libre se ha fragmentado hasta tal punto que no es posible insertar más proteínas bajo las restricciones impuestas, marcando el fin de la simulación por saturación.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{archivos/tetris.jpeg}
+    \caption{Esquema del algoritmo Tetris: se aplica un suavizado, binarizado, dilatación, subtración, correlación y posterior comprobación en el mapa de correlación.}
+    \label{fig:tetris}
+\end{figure}
+
+\subsection{Parámetros del algoritmo}
+
+Basado en la metodología de \textit{Template Learning}, el control del empaquetamiento y la calidad de la discretización depende de los siguientes parámetros:
+
+\begin{itemize}
+    \item \textbf{Radio del elemento estructural ($r$):} Define el grado de dilatación de la molécula y, por tanto, controla directamente la distancia mínima entre proteínas y la compacidad final de la muestra.
+    \item \textbf{Desviación estándar ($\sigma$):} Parámetro del filtro gaussiano de paso bajo aplicado antes de la binarización para suavizar las densidades.
+    \item \textbf{Umbral de volumen ($v_{th}$):} Valor utilizado para la binarización de los mapas de densidad.
+    \item \textbf{Frecuencia de tipos ($f$):} Ratio que determina la proporción entre proteínas objetivo (\textit{templates}) y moléculas de distracción (\textit{distractors}) para mantener un equilibrio de densidad volumétrica.
+\end{itemize}
+
+\subsection{Pseudocódigo}
+
+\begin{algorithm}[H]
+    \caption{Generación de volúmenes congestionados mediante Tetris}
+    \label{alg:tetris_tecnico}
+    \KwIn{Proteínas PDB ($P$), Distractor moleculas ($D$), Volumen ($V$), $r, \sigma, v_{th}$}
+    \KwOut{Volumen 3D y coordenadas orientadas}
+    Seleccionar molécula inicial $M_0$ y posicionar en el centro de $V$\;
+    Actualizar salida actual $O \gets M_0$\;
+    
+    \While{Existan posiciones válidas}{
+        Seleccionar nueva molécula $M_i \in \{P \cup D\}$ y aplicar rotación aleatoria uniforme\;
+        $M_{bin} \gets$ suavizar\_y\_binarizar($M_i, \sigma, v_{th}$)\;
+        $M_{dil} \gets$ dilatar($M_{bin}, r$)\;
+        $In\_shell \gets M_{dil} - (M_{bin} \cdot \infty)$ \tcp*{Generar guía espacial}
+        
+        $C\_map \gets$ correlacionar($In\_shell$, binarizar($O$))\;
+        
+        \If{$C\_map$ tiene valores positivos}{
+            $pos\_max \gets$ índice del valor máximo en $C\_map$\;
+            Insertar $M_i$ en $O$ en la posición $pos\_max$\;
+            Actualizar volumen de salida $O$\;
+        }
+        \Else{
+            \textbf{break} \tcp*{Saturación alcanzada: no hay más huecos}
+        }
+    }
+    \Return Volumen $O$ y registro de coordenadas\;
+\end{algorithm}
+
+\subsection{Análisis de complejidad y justificación}
+
+A diferencia de los enfoques estocásticos utilizados en SAWLC, el algoritmo Tetris presenta una arquitectura optimizada para la gestión de volúmenes discretos mediante un proceso determinista. Para la inserción de $N$ proteinas solubles en un tomograma de $V$ vóxeles, el coste computacional se rige por la operación de correlación necesaria en cada iteración, expresándose formalmente como:
+
+\begin{equation}
+O(N \cdot V \log V)
+\end{equation}
+
+Esta complejidad se fundamenta en el empleo de la Transformada Rápida de Fourier (FFT) para el cálculo del mapa de correlación ($c\text{-}map$), permitiendo que el procesamiento escale de forma eficiente con las dimensiones del volumen. Al buscar sistemáticamente el máximo global de probabilidad de inserción, el diseño del algoritmo permite evitar el estancamiento configuracional característico de los métodos basados en muestreos aleatorios.\\
+
+La justificación técnica de esta metodología sobre SAWLC reside en su capacidad para modelar el \textbf{empaquetamiento molecular} (\textit{molecular crowding}) con geometrías genéricas no esféricas de forma sistemática. Mientras que el crecimiento de cadenas aleatorias puede verse interrumpido prematuramente por la fragmentación del espacio libre, el algoritmo Tetris garantiza un llenado determinista de los intersticios, eliminando espacios vacíos no estructurados y permitiendo alcanzar densidades biológicamente verosímiles para el entrenamiento de modelos de \textit{deep learning}.\\
+
+En el contexto de su integración en el \textit{framework} \textbf{PolNet}, se hace evidente que el algoritmo debe ser adaptado para adquirir consciencia del contexto estructural previo. Bajo esta premisa, la máscara de ocupación inicial debe incorporar el volumen de las densidades preexistentes, como membranas y filamentos, garantizando que el mapa de correlación identifique posiciones válidas que respeten estrictamente los demás elementos biológicos. Asimismo, se requiere el diseño de un mecanismo de generación de clústeres inteligente que trascienda la dispersión aleatoria; para ello, el algoritmo debe utilizar las posiciones de máxima afinidad geométrica para nuclear el crecimiento de las proteínas solubles, asegurando una ocupación homogénea y compacta de la totalidad del volumen del tomograma.
+
+

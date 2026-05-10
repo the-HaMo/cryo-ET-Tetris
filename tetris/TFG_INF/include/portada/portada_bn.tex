@@ -1,0 +1,75 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Plantilla TFG/TFM
+% Universidad de Murcia. Facultad de Informática
+% Realizado por: José Manuel Requena Plens
+% Modificado: Pablo José Rocamora Zamora
+% Contacto: pablojoserocamora@gmail.com
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\begin{titlepage}
+
+	% Márgenes de esta pagina modificados
+	\newgeometry{ignoreall,top=2cm,ignoreall}
+	
+	% Offset horizontal para toda la portada
+	\setlength{\centeroffset}{-0.5\oddsidemargin}
+	\addtolength{\centeroffset}{0.5\evensidemargin}
+	\thispagestyle{empty}
+	
+	% Titulo y subtitulo
+	\noindent\hspace*{\centeroffset}\begin{minipage}{\textwidth}
+	\centering
+	\begin{spacing}{1.5}{\huge\bfseries \titulo}\end{spacing}
+		\noindent\rule[-1ex]{\textwidth}{3pt}\\[3.5ex] % Linea
+		{\large\bfseries \subtitulo\\[4cm]}
+	\end{minipage}
+	
+	% Relleno hasta la zona central
+	\vspace{2.5cm}
+	
+	% Zona central. Autor y Tutores
+	\noindent\hspace*{\centeroffset}
+	\begin{minipage}{\textwidth}
+        % Zona central. Autor y Tutores
+        \centering
+        \textbf{Autor}\\ 
+        {\miNombre}\\[2.5ex]
+        \textbf{Tutor}\\
+        {\normalsize \miTutor 
+        \ifx\departamentoTutor\undefined \else \\ \small\textit{\departamentoTutor} \fi}\\[2.5ex]
+        \textbf{Co-tutor}\\
+        {\ifx\miTutorB\undefined \else \normalsize \miTutorB \fi}        
+    	\end{minipage}
+	% Relleno hasta la zona de abajo
+	\vspace*{\fill}
+	
+	% Zona de abajo
+	\noindent\hspace*{\centeroffset}
+	\begin{minipage}{\textwidth}
+		\centering
+		\noindent\hspace*{\centeroffset}
+		\begin{center}
+			{\includegraphics[width=6cm]{\logoGrado}}\\
+			{\raggedleft\miGrado}
+		\end{center}
+		\vspace*{2em}
+		\centering
+		\noindent\hspace*{\centeroffset}
+		\begin{minipage}[l]{6cm}
+			\includegraphics[width=4cm]{\logoDepartamento}
+		\end{minipage}
+		\begin{minipage}[r]{6cm}
+			\includegraphics[width=6cm]{\logoUniversidad}
+		\end{minipage}
+		\\[1cm]
+		Murcia, \Hoy
+	\end{minipage}
+
+
+\end{titlepage}
+
+% A partir de aquí aplica los márgenes establecidos en configuracioninicial.tex
+\restoregeometry
+
+

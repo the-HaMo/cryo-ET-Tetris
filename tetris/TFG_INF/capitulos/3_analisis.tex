@@ -1,0 +1,121 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Plantilla TFG/TFM
+% Universidad de Murcia. Facultad de Informática
+% Realizado por: José Manuel Requena Plens
+% Modificado: Pablo José Rocamora Zamora
+% Contacto: pablojoserocamora@gmail.com
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\chapter{Análisis de objetivos y metodología}
+
+\section{Objetivos}
+
+El objetivo general de este proyecto es optimizar y acelerar el proceso de generación de tomogramas sintéticos para el \textit{framework} \textbf{PolNet}. Específicamente, se busca perfeccionar la inserción de proteínas solubles en entornos biológicos complejos que contienen estructuras preexistentes, como membranas y filamentos, logrando una alta densidad en la muestra. Para alcanzar esta meta, se han definido los siguientes objetivos específicos:
+
+\begin{itemize}
+    \item \textbf{Estudio comparativo de la capacidad de empaquetamiento}: Evaluar el grado de ocupación (\textit{occupancy}) alcanzado por el algoritmo \textbf{Tetris} frente al modelo \textbf{SAWLC}. Se analizará el tiempo de ejecucción, el grado de ocupancia, el número de proteínas insertadas, etc.
+    
+    \item \textbf{Adaptación del algoritmo Tetris}: Modificar el proceso de inserción del algoritmo Tetris\footnote{El algoritmo por defecto no tiene en cuenta los elementos biológicos preexistentes antes del proceso de inserción de proteínas.} original para que sea capaz de reconocer el volumen ocupado por elementos biológicos preinsertados en \textbf{PolNet}. Esto implica que la máscara de ocupación inicial debe integrar las densidades de membranas y filamentos para que el mapa de correlación (\textit{c-map}) identifique únicamente posiciones biológicamente válidas.
+    
+   \item \textbf{Generación inteligente de clústeres}: Desarrollar un mecanismo de crecimiento local guiado por correlación para favorecer agrupaciones compactas, reduciendo la dispersión aleatoria y los intentos fallidos.
+    
+    \item \textbf{Aceleración del proceso mediante computación en GPU}: Diseñar y ejecutar una versión del algoritmo optimizada para su procesamiento paralelo en tarjeta gráfica. El objetivo es aprovechar la eficiencia de la GPU en operaciones de correlación y Transformadas Rápidas de Fourier (FFT) para reducir drásticamente los tiempos de simulación.
+    
+    \item \textbf{Validación del modelo (\textit{Ground Truth})}. Verificar el grado de ocupancia y coherencia geométrica de los tomogramas generados, evaluando su adecuación como datos de entrenamiento para tareas de detección de partículas (\textit{particle picking}) mediante modelos de \textit{Deep Learning}.
+\end{itemize}
+
+
+\section{Metodología}
+
+La metodología seguida en este proyecto se estructura en cuatro fases secuenciales que abarcan desde el análisis inicial hasta la validación experimental del sistema desarrollado.
+
+\subsection{Fase 1: Análisis del algoritmo Tetris de referencia}
+
+El punto de partida del trabajo consistió en la comprensión profunda del algoritmo Tetris descrito en el artículo \textit{Template Learning} \cite{harastani2025template}. Esta fase incluyó:
+
+\begin{enumerate}
+    \item \textbf{Estudio del código de referencia}: Análisis de la implementación original para identificar las operaciones críticas y costosas del algoritmo como rotación de moléculas, binarización mediante filtrado gaussiano, generación de la \textit{in-shell} por dilatación, correlación FFT y selección del máximo del \textit{c-map}.
+    
+    \item \textbf{Identificación de las operaciones computacionalmente costosas}: Mediante perfilado de código se determinó que la correlación FFT tridimensional representa más del 80\% del tiempo de ejecución total, seguida por la transformación afín para rotación de moléculas.
+    
+    \item \textbf{Verificación de la lógica del algoritmo}: Comprobación de que el principio de inserción secuencial por máxima proximidad (selección del $\arg\max(C)$ del mapa de correlación) garantiza el empaquetamiento compacto sin solapamientos gracias a la penalización negativa en el núcleo de la \textit{in-shell}.
+\end{enumerate}
+
+\subsection{Fase 2: Implementación y Adaptación en PolNet}
+
+Esta fase se centró en adaptar el algoritmo Tetris al \textit{framework} PolNet con el objetivo de facilitar una futura integración. En particular, fue necesario modificar el algoritmo para que tuviera en cuenta estructuras biológicas preexistentes, como membranas y filamentos, durante el proceso de inserción de proteínas solubles.
+
+\begin{enumerate}
+    \item \textbf{Integración de elementos biológicos previo}: El algoritmo original asume un volumen inicialmente vacío. Para permitir la inserción de proteínas sobre membranas ya generadas por Polnet, se implementó un mecanismo de pre-carga que incorpora las densidades de estos elementos al volumen acumulado. Estos elementos se marcan con valores de densidad muy superiores al umbral proteico ($\rho_{membrane} = 500.0 \gg \theta_{protein}$) para que sean reconocidos como zonas prohibidas durante todo el proceso de inserción.
+ 
+    \item \textbf{Protección de regiones ocupadas}: 
+    Se aplica una máscara booleana que distingue vóxeles válidos y no válidos (membranas/filamentos). Antes de buscar el máximo del mapa de correlación, las posiciones prohibidas se penalizan con un valor muy negativo ($-10^9$), de modo que nunca pueden ser seleccionadas como candidatos. Esto garantiza que la inserción de proteínas solubles se limite a regiones biológicamente permitidas, independientemente de la intensidad local de la correlación.
+    
+    \item \textbf{Sistema de semillas inteligente}: El algoritmo original coloca la primera molécula en el centro del volumen y luego crece por proximidad, dejando los bordes del tomograma vacíos y sin tener en cuenta otros elementos. Se desarrolló una función \texttt{pick\_seed()} que muestrea uniformemente posiciones válidas en todo el espacio libre viable, garantizando que el empaquetamiento cubra homogéneamente el volumen,
+    \begin{equation}
+    \text{viable}[z, y, x] = \text{allowed}[z, y, x] \land (\text{output}[z, y, x] \leq \theta) \land (z, y, x \notin \text{border})
+    \end{equation}
+    
+    donde $\text{border}$ denota la región de margen ($r/2$ vóxeles desde cada dimensión) donde la proteína no cabría entera. Esto garantiza que el empaquetamiento cubra homogéneamente el volumen, incluyendo las regiones periféricas.
+    
+   
+    \item \textbf{Gestión de umbrales y selección de proteínas}: Para garantizar la consistencia en la detección de colisiones, se establece un umbral de binarización global definido como el 8\% del valor máximo de densidad de la proteína de mayor tamaño (tras realizar una ordenación descendente del catálogo de entrada). Este valor se mantiene constante durante todas las iteraciones del algoritmo, evitando las inconsistencias geométricas que surgirían si se aplicaran cambios dinámicos de umbral entre distintos tipos de macromoléculas.\\
+    
+    El algoritmo prioriza la inserción de las proteínas de mayor tamaño para maximizar el empaquetamiento inicial y reducir la fragmentación temprana del volumen libre. El tamaño se determina mediante el cálculo de la \textit{ocupación interna} de cada proteína, definida como la relación entre la masa binarizada y el volumen del contenedor:
+    
+    \begin{equation}
+        \text{Ocupación}_{\text{interna}} = \frac{\text{Vóxeles}_{\text{ocupados}}}{\text{Volumen}_{\text{total}}}
+    \end{equation}
+    
+    Donde los \textit{vóxeles ocupados} representan la cantidad de elementos de volumen que componen la estructura proteica tras la binarización. Por ejemplo, para la proteína \textit{5mrc\_10A} con dimensiones de caja de ($72 \times 72 \times 72$), el volumen total es de $373,248$ vóxeles. Al ocupar $15,731$ vóxeles efectivos, su ocupación interna resultante es del $4.21\%$.  
+    
+    \item \textbf{Consistencia de proteínas solubles}: Se añadió una comprobación explícita de integridad geométrica (\textit{boundary check} extra que verifica si la caja delimitadora de la molécula candidata se sale del volumen:
+    
+    \begin{equation}
+    \text{válido} \Leftrightarrow (z - r/2 \geq 0) \land (z + r/2 < D_z) \land \dots
+    \end{equation}
+    
+    Si la comprobación geométrica falla —es decir, si la caja delimitadora de la molécula candidata excede los límites del volumen—, la posición correspondiente en el mapa de correlación se penaliza con un valor de $-10^9$, descartándola como candidato e invalidándola para el resto de la búsqueda local. El algoritmo continúa evaluando las siguientes posiciones de mayor correlación dentro del mismo \textit{c-map}, con un máximo de 50 intentos por llamada. Si ninguna posición supera todas las comprobaciones de límites y colisión dentro de ese límite de intentos, el algoritmo devuelve el estado \texttt{'saturated'}, indicando que no existe espacio viable en la región local analizada.
+\end{enumerate}
+
+\subsection{Fase 3: Optimización mediante aceleración GPU}
+
+Una vez verificada la corrección lógica de la implementación adaptada, se procedió a su optimización mediante computación paralela en GPU.
+
+\begin{enumerate}
+    \item\textbf{Identificación de operaciones paralelizables}: Las tres operaciones más costosas del algoritmo —correlación FFT 3D, transformación afín de rotación y filtrado gaussiano— son inherentemente paralelizables y cuentan con implementaciones optimizadas en \texttt{CuPy}.
+
+    \item \textbf{Implementación de rutas duales CPU/GPU}: Se diseñó un sistema de detección automática de GPU al inicio de la ejecución. Si se detecta una GPU compatible (CUDA), las operaciones se redirigen a las funciones equivalentes de \texttt{cupyx.scipy}; en caso contrario, el código funciona de forma transparente con \texttt{scipy} en CPU, sin cambios en la lógica algorítmica.
+
+     \item \textbf{Minimización de transferencias de memoria}: Las transferencias entre memoria principal (CPU) y memoria de la GPU son un cuello de botella conocido en computación heterogénea. Se optimizó el flujo para que cada operación GPU reciba datos NumPy, los convierta a \texttt{cupy.ndarray}, ejecute el cálculo en GPU, y devuelva el resultado de nuevo a NumPy, evitando transferencias intermedias innecesarias.
+    
+    \item \textbf{Validación de equivalencia numérica}: Se verificó que las salidas de las rutas CPU y GPU son numéricamente equivalentes (diferencias inferiores a $10^{-6}$ debido a precisión de punto flotante), garantizando que la aceleración no introduce errores algorítmicos.
+\end{enumerate}
+
+\subsection{Fase 4: Benchmark y herramientas de análisis}
+
+Para evaluar el rendimiento del sistema desarrollado frente a la referencia SAWLC, se diseñó un protocolo de experimentación reproducible.
+
+\begin{enumerate}
+    \item \textbf{Definición del conjunto de experimentos}: Se estableció una batería de 11 simulaciones sobre el mismo tomograma de membrana (tomo3), variando el número de tipos de proteína insertadas de 1 a 11. En cada iteración se elimina la proteína más pequeña para analizar la relación entre tamaño molecular y saturación del volumen.
+    
+    \item \textbf{Configuración del entorno de ejecución}: Todas las simulaciones se ejecutaron en el mismo hardware (CPU: AMD Ryzen 9 5900X, GPU: NVIDIA RTX 4090, RAM: 64GB) para garantizar la comparabilidad de los tiempos de cómputo.
+    
+    \item \textbf{Desarrollo de herramientas de análisis automatizado}:
+    \begin{itemize}
+        \item \textbf{Parser de logs (\texttt{parse\_logs.py})}: Script para extraer métricas clave de los archivos de salida de Tetris y SAWLC: tiempo de ejecución, número de monómeros insertados, ocupancia de proteínas, ocupancia total, y vóxeles ocupados.
+        
+        \item \textbf{Generador de gráficas comparativas (\texttt{plot\_comparison.py})}: Sistema automatizado que genera 12 figuras de análisis: tiempo de cómputo, ocupancia total, ocupancia proteica, throughput (monómeros/segundo), speedup, contribución por tipo de proteína, scatter ocupancia vs tiempo, y dashboard resumen.
+    \end{itemize}
+    
+    \item \textbf{Métricas de evaluación}: Se definieron las siguientes variables dependientes para el análisis:
+    \begin{itemize}
+        \item \textbf{Ocupancia de proteínas} ($\rho_{prot}$): Porcentaje del volumen ocupado exclusivamente por proteínas solubles.
+        \item \textbf{Ocupancia total} ($\rho_{total}$): Porcentaje considerando membrana y proteínas.
+        \item \textbf{Throughput}: Número de monómeros insertados por segundo.
+        \item \textbf{Speedup}: Cociente entre ($t_{SAWLC}/t_{Tetris}$).
+    \end{itemize}
+\end{enumerate}
+
+Esta metodología de cuatro fases permitió: (1) comprender el algoritmo de referencia, (2) adaptarlo al contexto de PolNet con correcciones críticas, (3) optimizarlo mediante GPU sin alterar su naturaleza, y (4) validarlo experimentalmente mediante un protocolo reproducible con herramientas de análisis automatizado.
