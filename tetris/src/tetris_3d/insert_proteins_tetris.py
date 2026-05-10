@@ -41,6 +41,7 @@ PROTEIN_ISO_THRESHOLD_RATIO = 0.08
 MEMBRANE_INTENSITY_SCALE = 0.35
 VOI_VSIZE = 10
 TRIES_CLUSTERING = 10
+VOI_SHAPE = (500, 500, 250)  
 
 def sorted_proteinSizes(proteins_list):
     def internal_occupancy(p_path):
@@ -70,9 +71,13 @@ def pick_seed(allowed_mask, output_volume, threshold, box_size):
 
 def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, membrane_id):
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    print(f"\nProcessing Tomogram: {os.path.basename(membrane_mrc_path)}")
+    label = os.path.basename(str(membrane_mrc_path)) if membrane_mrc_path else "empty_volume"
+    print(f"\nProcessing Tomogram: {label}")
     start_time = time.time()
-    membrane_volume = lio.load_mrc(str(membrane_mrc_path)).astype(np.float32)
+    if membrane_mrc_path is None:
+        membrane_volume = np.zeros(VOI_SHAPE, dtype=np.float32)
+    else:
+        membrane_volume = lio.load_mrc(str(membrane_mrc_path)).astype(np.float32)
     allowed_mask = xp.asarray(~(membrane_volume > 0))
     total_voxels = allowed_mask.size
     membrane_occ = float(xp.count_nonzero(~allowed_mask) / total_voxels)
@@ -125,7 +130,7 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
     final[~allowed_mask] = 0.0
     combined = final + ((~allowed_mask).astype(np.float32) * (MEMBRANE_INTENSITY_SCALE * final.max()))
     combined_cpu = combined.get() if HAS_GPU else combined
-    tomo_idx = Path(membrane_mrc_path).stem.split("_")[-1]
+    tomo_idx = Path(membrane_mrc_path).stem.split("_")[-1] if membrane_mrc_path else "empty"
     num_types = len(proteins_list)
     output_mrc = Path(output_dir) / f"tomo{tomo_idx}_den{num_types}.mrc"
     lio.write_mrc(combined_cpu, str(output_mrc), v_size=VOI_VSIZE)
@@ -148,4 +153,7 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
     print(f"DONE: {total_inserted} inserted in {total_minutes}m {total_seconds:.2f}s")
 
 if __name__ == "__main__":
-    insert_proteins_in_membrane(MEMBRANES_PATH / MEMBRANE_FILES[0], sorted_proteinSizes(PROTEINS_LIST), OUT_DIR, 0)
+    if MEMBRANE_FILES:
+        insert_proteins_in_membrane(MEMBRANES_PATH / MEMBRANE_FILES[0], sorted_proteinSizes(PROTEINS_LIST), OUT_DIR, 0)
+    else:
+        insert_proteins_in_membrane(None, sorted_proteinSizes(PROTEINS_LIST), OUT_DIR, 0)

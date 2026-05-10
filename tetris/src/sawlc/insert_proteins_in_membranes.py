@@ -55,6 +55,7 @@ CLEAN_INTERMEDIATE_FILES = True
 EXPORT_VTP = True
 PROTEIN_ISO_THRESHOLD_RATIO = 0.08
 DEBUG_OCCUPANCY = True
+VOI_SHAPE = (500, 500, 250) 
 
 # Set random seed for reproducibility
 np.random.seed(42)
@@ -115,22 +116,27 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
         output_dir: Output directory for results
         membrane_id: ID of the membrane for naming
     """
+    label = os.path.basename(str(membrane_mrc_path)) if membrane_mrc_path else "empty_volume"
     print(f"\n{'='*60}")
-    print(f"Processing membrane: {os.path.basename(membrane_mrc_path)}")
+    print(f"Processing membrane: {label}")
     print(f"{'='*60}")
-    
+
     start_time = time.time()
-    
-    # Load membrane from MRC
-    print(f"Loading membrane from: {membrane_mrc_path}")
+
+    # Load membrane from MRC or create empty volume
     try:
-        membrane_volume = lio.load_mrc(str(membrane_mrc_path))
-        print(f"Membrane shape: {membrane_volume.shape}")
-        print(f"Membrane value range: [{membrane_volume.min()}, {membrane_volume.max()}]")
+        if membrane_mrc_path is None:
+            membrane_volume = np.zeros(VOI_SHAPE, dtype=np.float32)
+            print(f"No membrane provided. Using empty volume {VOI_SHAPE}")
+        else:
+            print(f"Loading membrane from: {membrane_mrc_path}")
+            membrane_volume = lio.load_mrc(str(membrane_mrc_path))
+            print(f"Membrane shape: {membrane_volume.shape}")
+            print(f"Membrane value range: [{membrane_volume.min()}, {membrane_volume.max()}]")
     except Exception as e:
         print(f"ERROR loading membrane: {e}")
         return None
-    
+
     # Build a restricted VOI so SAWLC cannot place proteins inside membrane voxels.
     try:
         membrane_mask = membrane_volume > 0
@@ -312,24 +318,36 @@ def main():
     
     total_start = time.time()
     
-    for idx, mem_file in enumerate(MEMBRANE_FILES):
-        membrane_path = MEMBRANES_PATH / mem_file
-        
-        if not membrane_path.exists():
-            print(f"\nWARNING: Membrane file not found: {membrane_path}")
-            continue
-        
+    if not MEMBRANE_FILES:
         result = insert_proteins_in_membrane(
-            membrane_path,
+            None,
             sorted_proteinSizes(PROTEINS_LIST),
             OUT_DIR,
-            membrane_id=idx
+            membrane_id=0,
         )
-        
         if result:
-            print(f"✓ Successfully processed membrane {idx}")
+            print("✓ Successfully processed empty volume")
         else:
-            print(f"✗ Failed to process membrane {idx}")
+            print("✗ Failed to process empty volume")
+    else:
+        for idx, mem_file in enumerate(MEMBRANE_FILES):
+            membrane_path = MEMBRANES_PATH / mem_file
+
+            if not membrane_path.exists():
+                print(f"\nWARNING: Membrane file not found: {membrane_path}")
+                continue
+
+            result = insert_proteins_in_membrane(
+                membrane_path,
+                sorted_proteinSizes(PROTEINS_LIST),
+                OUT_DIR,
+                membrane_id=idx,
+            )
+
+            if result:
+                print(f"✓ Successfully processed membrane {idx}")
+            else:
+                print(f"✗ Failed to process membrane {idx}")
     
     total_time = time.time() - total_start
     total_minutes = int(total_time // 60)

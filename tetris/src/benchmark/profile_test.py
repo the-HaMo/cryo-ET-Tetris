@@ -1,7 +1,12 @@
 """Profile Tetris 3D and render occupancy vs time with a time breakdown bar."""
 
+import sys
 import time
 from pathlib import Path
+
+# Add tetris_3d directory to path so we can import its modules
+tetris_3d_dir = Path(__file__).parent.parent / "tetris_3d"
+sys.path.insert(0, str(tetris_3d_dir))
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
@@ -17,6 +22,7 @@ from insert_proteins_tetris import (
     MEMBRANE_INTENSITY_SCALE,
     VOI_VSIZE,
     TRIES_CLUSTERING,
+    VOI_SHAPE,
     ROOT_PATH,
     sorted_proteinSizes,
 )
@@ -115,11 +121,16 @@ def _plot_occupancy_timeline(timeline, totals, total_time, output_path):
 
 
 def main():
-    membrane_path = MEMBRANES_PATH / MEMBRANE_FILES[0]
     output_dir = OUT_DIR
 
     start_time = time.perf_counter()
-    membrane_volume = lio.load_mrc(str(membrane_path)).astype("float32")
+    if MEMBRANE_FILES:
+        membrane_path = MEMBRANES_PATH / MEMBRANE_FILES[0]
+        membrane_volume = lio.load_mrc(str(membrane_path)).astype("float32")
+        print(f"[PROFILE] Using membrane: {membrane_path.name}")
+    else:
+        membrane_volume = np.zeros(VOI_SHAPE, dtype="float32")
+        print(f"[PROFILE] No membrane — using empty volume {VOI_SHAPE}")
     allowed_mask = xp.asarray(~(membrane_volume > 0))
 
     molecules = []
