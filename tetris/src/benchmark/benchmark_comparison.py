@@ -16,13 +16,14 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Añadir paths para importar módulos
-sys.path.append(os.path.join(os.path.dirname(__file__), 'tetris_3d'))
-sys.path.append(os.path.join(os.path.dirname(__file__), 'sawlc'))
+# Rutas a módulos hermanos (src/tetris_3d y src/sawlc)
+_SRC = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_SRC / "tetris_3d"))
+sys.path.insert(0, str(_SRC / "sawlc"))
 
 # Parámetros comunes para ambos algoritmos
 COMMON_PARAMS = {
-    'VOI_SHAPE': (300, 300, 250),
+    'VOI_SHAPE': (500, 500, 250),
     'VOXEL_SIZE': 10.0,  # A/vx
     'PROTEINS_LIST': [
         "in_10A/4v4r_10A.pns",
@@ -33,162 +34,128 @@ COMMON_PARAMS = {
 }
 
 # Niveles de ocupancia a evaluar (%)
-OCCUPANCY_LEVELS = [10, 15, 20, 25, 30, 35, 40, 45, 50]
+OCCUPANCY_LEVELS = [10, 15]
 
 
 class BenchmarkTetris3D:
     """Wrapper para ejecutar Tetris 3D con ocupancia objetivo"""
-    
+
     def __init__(self, params: dict):
+        self.params = params
+        np.random.seed(params['SEED'])
+
+    def run(self, target_occupancy: float, save_output: bool = False) -> Dict:
+        from tetris import Tetris3D, xp
         from image_processing_3d import ImageProcessing3D
         from parser_3d import Parser3D
-        
-        self.params = params
-        self.ImageProcessing3D = ImageProcessing3D
-        self.Parser3D = Parser3D
-        np.random.seed(params['SEED'])
-    
-    def run(self, target_occupancy: float, save_output: bool = False) -> Dict:
-        """
-        Ejecuta Tetris 3D hasta alcanzar ocupancia objetivo
-        
-        Returns:
-            Dict con: time, proteins_inserted, final_occupancy, saturated
-        """
-        from tetris import Tetris3D
-        
+        from insert_proteins_tetris import pick_seed, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING
+
         start_time = time.time()
-        
-        # Rutas
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        data_dir = os.path.join(base_dir, 'data')
-        
-        # Cargar proteínas
-        molecules = {}
-        for protein_path in self.params['PROTEINS_LIST']:
-            full_path = os.path.join(data_dir, protein_path)
-            if os.path.exists(full_path):
-                name = os.path.basename(protein_path)
-                try:
-                    volume, _ = self.Parser3D.load_protein(full_path, data_dir)
-                    molecules[name] = volume
-                except Exception as e:
-                    print(f"Error cargando {name}: {e}")
-        
-        if len(molecules) == 0:
+        data_dir = Path(__file__).resolve().parents[2] / "data"
+
+        # Cargar y recortar proteínas (ordenadas por ocupación interna descendente)
+        from insert_proteins_tetris import sorted_proteinSizes
+        molecules = []
+        for p_path in sorted_proteinSizes(self.params['PROTEINS_LIST']):
+            vol, _ = Parser3D.load_protein(str(data_dir / p_path), str(data_dir))
+            threshold = vol.max() * PROTEIN_ISO_THRESHOLD_RATIO
+            coords = xp.argwhere(vol > threshold)
+            if coords.size == 0:
+                continue
+            z0, y0, x0 = coords.min(axis=0)
+            z1, y1, x1 = coords.max(axis=0) + 1
+            molecules.append((os.path.basename(p_path), vol[int(z0):int(z1), int(y0):int(y1), int(x0):int(x1)]))
+
+        if not molecules:
             raise ValueError("No se encontraron proteínas")
-        
-        # Crear Tetris 3D
-        tetris = Tetris3D(
-            dimensions=self.params['VOI_SHAPE'],
-            sigma=1.5,
-            threshold=1,
-            insertion_distances=(-2, 0)
-        )
-        
-        # Insertar moléculas
-        mol_list = list(molecules.values())
-        mol_names = list(molecules.keys())
+
+        global_threshold = molecules[0][1].max() * PROTEIN_ISO_THRESHOLD_RATIO
+        tetris = Tetris3D(dimensions=self.params['VOI_SHAPE'], threshold=global_threshold)
+        allowed_mask = xp.ones(self.params['VOI_SHAPE'], dtype=bool)
+
         inserted = 0
         saturated = False
-        
         print(f"\n[TETRIS] Objetivo: {target_occupancy*100:.1f}%")
-        
-        while True:
-            mol_idx = inserted % len(mol_list)
-            mol_name = mol_names[mol_idx]
-            
-            success = tetris.insert_molecule_3d(mol_list[mol_idx], mol_name=mol_name)
-            
-            if success:
-                inserted += 1
-                current_occupancy = tetris.get_occupancy()
-                
-                # Verificar si alcanzamos objetivo
-                if current_occupancy >= target_occupancy:
-                    print(f"[TETRIS] Ocupancia alcanzada: {current_occupancy*100:.1f}% ({inserted} proteínas)")
-                    break
-            else:
-                # Saturación
-                current_occupancy = tetris.get_occupancy()
-                saturated = True
-                print(f"[TETRIS] SATURACIÓN: {current_occupancy*100:.1f}% ({inserted} proteínas)")
+
+        for name, volume in molecules:
+            if float(tetris.get_occupancy()) >= target_occupancy:
                 break
-        
-        elapsed_time = time.time() - start_time
-        
+            box_size = max(volume.shape)
+            target = pick_seed(allowed_mask, tetris.output_volume, global_threshold, box_size)
+            failures = 0
+            while failures < TRIES_CLUSTERING:
+                if target is None or float(tetris.get_occupancy()) >= target_occupancy:
+                    break
+                rotated, _ = ImageProcessing3D.randomly_rotate(volume)
+                rotated_bin = ImageProcessing3D.smooth_and_binarize(rotated, 1.5, global_threshold)
+                template, _, _ = ImageProcessing3D.create_in_shell(rotated_bin, (0, 2), penalty=100)
+                res = tetris.insert_molecule_3d(template, rotated, name, allowed_mask, target, box_size)
+                if res == 'inserted':
+                    inserted += 1
+                    failures = 0
+                    target = tetris.all_coordinates[-1]
+                else:
+                    failures += 1
+                    target = pick_seed(allowed_mask, tetris.output_volume, global_threshold, box_size)
+
+        current_occupancy = float(tetris.get_occupancy())
+        if current_occupancy < target_occupancy:
+            saturated = True
+            print(f"[TETRIS] SATURACIÓN: {current_occupancy*100:.1f}% ({inserted} proteínas)")
+        else:
+            print(f"[TETRIS] Ocupancia alcanzada: {current_occupancy*100:.1f}% ({inserted} proteínas)")
+
         return {
-            'time': elapsed_time,
+            'time': time.time() - start_time,
             'proteins_inserted': inserted,
             'final_occupancy': current_occupancy,
-            'saturated': saturated
+            'saturated': saturated,
         }
 
 
 class BenchmarkSAWLC:
-    """Wrapper para ejecutar SAWLC con ocupancia objetivo"""
-    
+    """Wrapper para ejecutar SAWLC hasta saturación y reportar ocupancia alcanzada"""
+
     def __init__(self, params: dict):
         self.params = params
         np.random.seed(params['SEED'])
-    
+
     def run(self, target_occupancy: float, save_output: bool = False) -> Dict:
-        """
-        Ejecuta SAWLC hasta alcanzar ocupancia objetivo
-        
-        Returns:
-            Dict con: time, proteins_inserted, final_occupancy, saturated
-        """
-        from polnet.tomogram import SynthTomo
-        
+        import sys as _sys
+        _sys.path.insert(0, str(_SRC / "sawlc"))
+        from insert_proteins_in_membranes import insert_proteins_in_membrane, sorted_proteinSizes
+
         start_time = time.time()
-        
-        # Rutas
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        data_dir = Path(base_dir) / 'data'
-        
-        print(f"\n[SAWLC] Objetivo: {target_occupancy*100:.1f}%")
-        
-        # Crear tomograma sintético
-        tomo = SynthTomo(
-            id=0,
-            mbs_file_list=[],
-            hns_file_list=[],
-            pns_file_list=self.params['PROTEINS_LIST'],
-            pms_file_list=[],
-        )
-        
-        # Generar muestra con ocupancia objetivo
+        output_dir = Path(__file__).resolve().parents[2] / "data" / "data_generated" / "output" / "benchmark_sawlc_tmp"
+
+        print(f"\n[SAWLC] Objetivo referencia: {target_occupancy*100:.1f}% (SAWLC corre hasta saturación)")
+
         try:
-            tomo.gen_sample(
-                data_path=data_dir,
-                shape=self.params['VOI_SHAPE'],
-                v_size=self.params['VOXEL_SIZE'],
-                offset=(4, 4, 4),
-                target_occupancy=target_occupancy,  # Pasar ocupancia objetivo
-                verbosity=False
-            )
-            
-            # Obtener estadísticas
-            final_occupancy = tomo.get_occupancy() if hasattr(tomo, 'get_occupancy') else target_occupancy
-            proteins_inserted = tomo.get_num_proteins() if hasattr(tomo, 'get_num_proteins') else 0
-            saturated = False
-            
-            print(f"[SAWLC] Completado: {final_occupancy*100:.1f}% ({proteins_inserted} proteínas)")
-            
+            proteins = sorted_proteinSizes(self.params['PROTEINS_LIST'])
+            result = insert_proteins_in_membrane(None, proteins, str(output_dir), membrane_id=0)
+            saturated = result is None
+            # Leer ocupancia desde el volumen generado si está disponible
+            final_occupancy = 0.0
+            proteins_inserted = 0
+            if result:
+                import mrcfile, numpy as _np
+                den_files = list(Path(result['output_dir']).glob("*.mrc"))
+                if den_files:
+                    with mrcfile.open(str(den_files[0]), mode='r') as mrc:
+                        vol = mrc.data.astype(_np.float32)
+                    final_occupancy = float(_np.count_nonzero(vol > 0) / vol.size)
+            print(f"[SAWLC] Completado: {final_occupancy*100:.1f}%")
         except Exception as e:
-            print(f"[SAWLC] Error o saturación: {e}")
-            final_occupancy = 0
+            print(f"[SAWLC] Error: {e}")
+            final_occupancy = 0.0
             proteins_inserted = 0
             saturated = True
-        
-        elapsed_time = time.time() - start_time
-        
+
         return {
-            'time': elapsed_time,
+            'time': time.time() - start_time,
             'proteins_inserted': proteins_inserted,
             'final_occupancy': final_occupancy,
-            'saturated': saturated
+            'saturated': saturated,
         }
 
 
@@ -278,7 +245,7 @@ def plot_results(results_tetris: Dict, results_sawlc: Dict, output_dir: str):
     sawlc_final_occ = [results_sawlc[occ]['final_occupancy'] * 100 for occ in occupancies]
     
     # Configurar estilo
-    plt.style.use('seaborn-v0_8-darkgrid')
+    plt.style.use('ggplot')
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle('Comparación: Tetris 3D vs SAWLC', fontsize=16, fontweight='bold')
     
@@ -372,8 +339,7 @@ def print_summary(results_tetris: Dict, results_sawlc: Dict):
 
 if __name__ == '__main__':
     # Directorio de salida
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(base_dir, 'data', 'data_generated', 'output', 'benchmark_results')
+    output_dir = Path(__file__).resolve().parents[2] / "data" / "data_generated" / "output" / "benchmark_results"
     
     # Ejecutar benchmark
     results_tetris, results_sawlc = run_benchmark()

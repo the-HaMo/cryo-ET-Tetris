@@ -40,32 +40,35 @@ import matplotlib.pyplot as plt
 import mrcfile
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 DATA = ROOT / "data"
 OUT_BASE = DATA / "data_generated" / "output"
 OUT_REPORT = OUT_BASE / "benchmark_scientific"
 
-SAWLC_SCRIPT = SRC / "sawlc" / "all_features.py"
-TETRIS_SCRIPT = SRC / "tetris_3d" / "tetris.py"
+SAWLC_SCRIPT  = SRC / "sawlc" / "all_features.py"
+TETRIS_SCRIPT = Path(__file__).resolve().parent / "tetris_runner.py"  # wrapper en benchmark/
 
-SAWLC_CWD = SRC / "sawlc"
-TETRIS_CWD = SRC / "tetris_3d"
+SAWLC_CWD  = SRC / "sawlc"
+TETRIS_CWD = Path(__file__).resolve().parent  # benchmark/
 
-SAWLC_CMD = ["python", "all_features.py"]
-TETRIS_CMD = ["python", "tetris.py"]
+SAWLC_CMD  = ["python", "all_features.py"]
+TETRIS_CMD = ["python", "tetris_runner.py"]
 
-SAWLC_LABEL = OUT_BASE / "output_sawlc" / "tomos" / "tomo_000_lbl.mrc"
-TETRIS_LABEL = OUT_BASE / "output_tetris" / "tetris_3d_output_labels.mrc"
+SAWLC_LABEL  = OUT_BASE / "output_sawlc" / "tomos" / "tomo_000_lbl.mrc"
+TETRIS_LABEL: Optional[Path] = None  # ocupancia se parsea del stdout
 
 # Configuración del benchmark
-PROTEIN_FILE = "in_10A/4v4r_10A.pns"
-TARGETS_PERCENT = [5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0, 27.5, 30.0, 32.5, 35.0]  # [15.0, 25.0] --- IGNORE ---
+PROTEIN_FILE = ["in_10A/2uv8_10A.pns"]
+TARGETS_PERCENT = [5.0, 7.5]
 REPEATS_PER_TARGET = 2
+
+# VOI igual para ambos algoritmos — reducir en máquinas sin GPU
+BENCHMARK_VOI_SHAPE = (500, 500, 250)
 
 # SAWLC en modo casi monómero: PMER_L_MAX muy bajo
 FORCE_SAWLC_SHORT_CHAIN = True
-SHORT_CHAIN_PMER_L_MAX = 1.0
+SHORT_CHAIN_PMER_L_MAX = 3000
 
 
 @dataclass
@@ -125,6 +128,36 @@ def get_pns_value(path: Path, key: str) -> Optional[str]:
     return None
 
 
+def set_var_in_script(script_path: Path, var: str, value: str) -> None:
+    """Parchea una asignación simple `VAR = <value>` en el script."""
+    text = read_text(script_path)
+    new_text, count = re.subn(
+        rf"^{var}\s*=\s*.+$",
+        f"{var} = {value}",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError(f"No se pudo actualizar {var} en {script_path}")
+    write_text(script_path, new_text)
+
+
+def set_voi_shape_in_script(script_path: Path, shape: tuple) -> None:
+    """Parchea VOI_SHAPE = (z, y, x) — soporta tanto inline como multilínea."""
+    text = read_text(script_path)
+    replacement = f"VOI_SHAPE = {shape!r}"
+    new_text, count = re.subn(
+        r"VOI_SHAPE\s*=\s*\([\s\S]*?\)",
+        replacement,
+        text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError(f"No se pudo actualizar VOI_SHAPE en {script_path}")
+    write_text(script_path, new_text)
+
+
 def set_proteins_list_in_script(script_path: Path, proteins: List[str]) -> None:
     text = read_text(script_path)
     block = "PROTEINS_LIST = [\n" + "\n".join([f'    "{p}",' for p in proteins]) + "\n]\n"
@@ -153,10 +186,14 @@ def parse_inserted(stdout: str, algo: str) -> Optional[int]:
     if algo == "sawlc":
         m = re.search(r"Total proteinas insertadas:\s*(\d+)", stdout)
     else:
-        m = re.search(r"Proteínas insertadas:\s*(\d+)", stdout)
-        if m is None:
-            m = re.search(r"Proteinas insertadas:\s*(\d+)", stdout)
+        m = re.search(r"DONE:\s*(\d+)\s*inserted", stdout)
     return int(m.group(1)) if m else None
+
+
+def parse_tetris_occupancy(stdout: str) -> Optional[float]:
+    """Extrae total_occ del stdout de insert_proteins_tetris.py."""
+    m = re.search(r"total_occ\s*=\s*([\d.]+)%", stdout)
+    return float(m.group(1)) if m else None
 
 
 def parse_pmer_fails(stdout: str) -> Optional[int]:
@@ -167,12 +204,12 @@ def parse_pmer_fails(stdout: str) -> Optional[int]:
 def parse_stop_reason(stdout: str, algo: str, occ: Optional[float], target_percent: float) -> str:
     s = stdout.lower()
     if algo == "tetris":
+        if "stop_reason = target-reached" in s:
+            return "target-reached"
+        if "stop_reason = saturation" in s:
+            return "saturation"
         if occ is not None and occ >= target_percent:
             return "target-reached"
-        if "ocupancia objetivo" in s:
-            return "target-reached-internal"
-        if "saturación" in s or "saturacion" in s:
-            return "saturation"
         return "unknown"
 
     # SAWLC: inferencia por resultado final
@@ -190,19 +227,28 @@ def run_algo(algo: str, target_percent: float, repeat_id: int) -> RunMetrics:
         cmd, cwd, label = TETRIS_CMD, TETRIS_CWD, TETRIS_LABEL
 
     start = time.time()
-    done = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
     )
+    stdout_lines, stderr_lines = [], []
+    for line in proc.stdout:
+        print(f"  [{algo.upper()}] {line}", end="")
+        stdout_lines.append(line)
+    proc.wait()
+    stderr_lines = proc.stderr.read().splitlines(keepends=True)
     runtime = time.time() - start
 
-    stdout = done.stdout or ""
-    stderr = done.stderr or ""
+    stdout = "".join(stdout_lines)
+    stderr = "".join(stderr_lines)
 
-    occ = compute_binary_occupancy_percent(label)
+    if label is not None:
+        occ = compute_binary_occupancy_percent(label)
+    else:
+        occ = parse_tetris_occupancy(stdout)
     inserted = parse_inserted(stdout, algo)
     pmer_fails = parse_pmer_fails(stdout) if algo == "sawlc" else None
 
@@ -228,7 +274,7 @@ def run_algo(algo: str, target_percent: float, repeat_id: int) -> RunMetrics:
         pmer_fails=pmer_fails,
         stop_reason=stop_reason,
         saturated=saturated,
-        exit_code=done.returncode,
+        exit_code=proc.returncode,
     )
 
 
@@ -368,9 +414,9 @@ def main() -> None:
     OUT_REPORT.mkdir(parents=True, exist_ok=True)
 
     sawlc_original = read_text(SAWLC_SCRIPT)
-    tetris_original = read_text(TETRIS_SCRIPT)
 
-    pns_path = DATA / PROTEIN_FILE
+    proteins = PROTEIN_FILE if isinstance(PROTEIN_FILE, list) else [PROTEIN_FILE]
+    pns_path = DATA / proteins[0]
     if not pns_path.exists():
         raise FileNotFoundError(f"No existe proteína de benchmark: {pns_path}")
 
@@ -380,9 +426,11 @@ def main() -> None:
     rows: List[RunMetrics] = []
 
     try:
-        # Igualar proteína en ambos algoritmos
-        set_proteins_list_in_script(SAWLC_SCRIPT, [PROTEIN_FILE])
-        set_proteins_list_in_script(TETRIS_SCRIPT, [PROTEIN_FILE])
+        # Igualar proteína y VOI en ambos algoritmos
+        set_proteins_list_in_script(SAWLC_SCRIPT, proteins)
+        set_proteins_list_in_script(TETRIS_SCRIPT, proteins)
+        set_voi_shape_in_script(SAWLC_SCRIPT, BENCHMARK_VOI_SHAPE)
+        set_voi_shape_in_script(TETRIS_SCRIPT, BENCHMARK_VOI_SHAPE)
 
         # SAWLC casi monómero
         if FORCE_SAWLC_SHORT_CHAIN:
@@ -390,6 +438,8 @@ def main() -> None:
 
         for target in TARGETS_PERCENT:
             set_pns_value(pns_path, "PMER_OCC", str(target / 100.0))
+            # Tetris runner usa TARGET_OCC para parar en el mismo objetivo
+            set_var_in_script(TETRIS_SCRIPT, "TARGET_OCC", str(target / 100.0))
 
             for rep in range(1, REPEATS_PER_TARGET + 1):
                 print(f"\n[RUN] target={target:.1f}% | rep={rep}")
@@ -407,7 +457,7 @@ def main() -> None:
                 "repeats_per_target": REPEATS_PER_TARGET,
                 "force_sawlc_short_chain": FORCE_SAWLC_SHORT_CHAIN,
                 "short_chain_pmer_l_max": SHORT_CHAIN_PMER_L_MAX,
-                "voi_shape": [300, 300, 250],
+                "voi_shape": list(BENCHMARK_VOI_SHAPE),
             },
             "rows": [asdict(r) for r in rows],
             "summary": summary,
@@ -421,9 +471,8 @@ def main() -> None:
         print(f"[OK] Gráficas: {OUT_REPORT / 'benchmark_scientific_plots.png'}")
 
     finally:
-        # Restaurar scripts
+        # Restaurar SAWLC (script original); tetris_runner.py es nuestro, se restaura solo
         write_text(SAWLC_SCRIPT, sawlc_original)
-        write_text(TETRIS_SCRIPT, tetris_original)
 
         # Restaurar .pns
         if original_occ is not None:
