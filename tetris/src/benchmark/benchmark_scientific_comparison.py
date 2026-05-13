@@ -1,486 +1,435 @@
 """
 Benchmark científico SAWLC vs Tetris 3D
+========================================
+Compara densidad de empaquetamiento y eficiencia computacional para distintos
+targets de ocupancia. Ambos algoritmos usan el mismo VOI y la misma proteína.
 
-Objetivo:
-- Comparar densidad de empaquetamiento (packing fraction)
-- Comparar eficiencia computacional (tiempo e inserciones)
-
-Metodología:
-1) Mismas condiciones para ambos algoritmos:
-   - Mismo VOI (300x300x250)
-   - Misma proteína base (.pns)
-   - Mismos targets de ocupancia
-2) Métricas principales:
-   - ocupancia final binaria (%)
-   - proteínas insertadas
-   - tiempo total (s)
-   - tiempo por inserción exitosa (s/proteína)
-   - proteínas por segundo
-   - pmer_fails (solo SAWLC)
-3) Escenarios propuestos:
-   - target 15%
-   - target 25%
-
-Notas:
-- Este script no reemplaza benchmark_comparison.py ni benchmark_algorithm_selection.py.
-- Restaura automáticamente scripts y parámetros .pns al finalizar.
+No modifica ningún script fuente. Solo parchea el fichero .pns (dato).
 """
-
 from __future__ import annotations
 
-import json
-import re
-import subprocess
-import time
+import json, multiprocessing as mp
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
-import mrcfile
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-DATA = ROOT / "data"
-OUT_BASE = DATA / "data_generated" / "output"
+ROOT       = Path(__file__).resolve().parents[2]
+SRC        = ROOT / "src"
+DATA       = ROOT / "data"
+OUT_BASE   = DATA / "data_generated" / "output"
 OUT_REPORT = OUT_BASE / "benchmark_scientific"
 
-SAWLC_SCRIPT  = SRC / "sawlc" / "all_features.py"
-TETRIS_SCRIPT = Path(__file__).resolve().parent / "tetris_runner.py"  # wrapper en benchmark/
+# Configuración
+PROTEIN_FILE = [
+    "in_10A/2uv8_10A.pns",
+    "in_10A/5mrc_10A.pns",
+    "in_10A/4v4r_10A.pns",
+    "in_10A/4v94_10A.pns",
+    "in_10A/4cr2_10A.pns",
+    "in_10A/1qvr_10A.pns",
+    "in_10A/3cf3_10A.pns",
+    "in_10A/2cg9_10A.pns",
+    "in_10A/1u6g_10A.pns",
+    "in_10A/3d2f_10A.pns",
+    "in_10A/1s3x_10A.pns"
+]
+TARGETS_PERCENT   = [2.5, 5.0] #, 5.0, 7.5, 10.0, 12.5, 15.0, 20.0, 22.5, 25.0, 27.5, 30.0, 32.5, 35.0, 37.5, 40.0, 42.5, 45.0, 47.5, 50.0, 52.5, 55.0]
+REPEATS_PER_TARGET = 1
+BENCHMARK_VOI_SHAPE = (500, 500, 250)   # reducir si hay OOM; usar (300,300,250) en GPU
 
-SAWLC_CWD  = SRC / "sawlc"
-TETRIS_CWD = Path(__file__).resolve().parent  # benchmark/
-
-SAWLC_CMD  = ["python", "all_features.py"]
-TETRIS_CMD = ["python", "tetris_runner.py"]
-
-SAWLC_LABEL  = OUT_BASE / "output_sawlc" / "tomos" / "tomo_000_lbl.mrc"
-TETRIS_LABEL: Optional[Path] = None  # ocupancia se parsea del stdout
-
-# Configuración del benchmark
-PROTEIN_FILE = ["in_10A/2uv8_10A.pns"]
-TARGETS_PERCENT = [5.0, 7.5]
-REPEATS_PER_TARGET = 2
-
-# VOI igual para ambos algoritmos — reducir en máquinas sin GPU
-BENCHMARK_VOI_SHAPE = (500, 500, 250)
-
-# SAWLC en modo casi monómero: PMER_L_MAX muy bajo
-FORCE_SAWLC_SHORT_CHAIN = True
-SHORT_CHAIN_PMER_L_MAX = 3000
-
+FORCE_SAWLC_SHORT_CHAIN = False
+SHORT_CHAIN_PMER_L_MAX  = 1
+#
 
 @dataclass
 class RunMetrics:
-    algorithm: str
-    target_percent: float
-    repeat_id: int
-    runtime_seconds: float
-    occupancy_percent_binary: Optional[float]
-    proteins_inserted: Optional[int]
-    time_per_insertion_seconds: Optional[float]
-    proteins_per_second: Optional[float]
-    pmer_fails: Optional[int]
-    stop_reason: str
-    saturated: bool
-    exit_code: int
+    algorithm:                    str
+    target_percent:               float
+    repeat_id:                    int
+    runtime_seconds:              float
+    occupancy_percent:            Optional[float]
+    proteins_inserted:            Optional[int]
+    time_per_insertion_seconds:   Optional[float]
+    proteins_per_second:          Optional[float]
+    pmer_fails:                   Optional[int]
+    stop_reason:                  str
+    saturated:                    bool
 
 
-def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+# ─── .pns helpers (dato, no código fuente) ───────────────────────────────────
 
-
-def write_text(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
-
-
-def read_pns_lines(path: Path) -> List[str]:
-    return path.read_text(encoding="utf-8").splitlines()
-
-
-def write_pns_lines(path: Path, lines: List[str]) -> None:
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def set_pns_value(path: Path, key: str, value: str) -> None:
-    lines = read_pns_lines(path)
-    out_lines: List[str] = []
-    replaced = False
-    for line in lines:
-        if line.strip().startswith(key):
-            out_lines.append(f"{key} = {value}")
-            replaced = True
+def _set_pns(path: Path, key: str, value: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out, replaced = [], False
+    for ln in lines:
+        if ln.strip().startswith(key):
+            out.append(f"{key} = {value}"); replaced = True
         else:
-            out_lines.append(line)
+            out.append(ln)
     if not replaced:
-        out_lines.append(f"{key} = {value}")
-    write_pns_lines(path, out_lines)
+        out.append(f"{key} = {value}")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
-
-def get_pns_value(path: Path, key: str) -> Optional[str]:
-    for line in read_pns_lines(path):
-        line = line.strip()
-        if line.startswith(key):
-            parts = line.split("=", 1)
+def _get_pns(path: Path, key: str) -> Optional[str]:
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if ln.startswith(key):
+            parts = ln.split("=", 1)
             if len(parts) == 2:
                 return parts[1].strip()
     return None
 
 
-def set_var_in_script(script_path: Path, var: str, value: str) -> None:
-    """Parchea una asignación simple `VAR = <value>` en el script."""
-    text = read_text(script_path)
-    new_text, count = re.subn(
-        rf"^{var}\s*=\s*.+$",
-        f"{var} = {value}",
-        text,
-        count=1,
-        flags=re.MULTILINE,
+# ─── Workers (nivel de módulo — requerido por multiprocessing.spawn) ──────────
+
+def _tetris_sci_worker(proteins: list, voi_shape: tuple, target_occ: float, q) -> None:
+    """Corre Tetris hasta target_occ y devuelve métricas."""
+    import sys as _sys, os as _os, time as _t
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
+
+    from tetris import Tetris3D, xp
+    from image_processing_3d import ImageProcessing3D
+    from parser_3d import Parser3D
+    from insert_proteins_tetris import (
+        pick_seed, sorted_proteinSizes, crop_volume,
+        ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
     )
-    if count != 1:
-        raise RuntimeError(f"No se pudo actualizar {var} en {script_path}")
-    write_text(script_path, new_text)
+
+    start   = _t.time()
+    allowed = xp.ones(voi_shape, dtype=bool)
+
+    mols = []
+    for p in sorted_proteinSizes(proteins):
+        vol, _ = Parser3D.load_protein(str(ROOT_PATH / p), str(ROOT_PATH))
+        vol_c  = crop_volume(vol, vol.max() * PROTEIN_ISO_THRESHOLD_RATIO)
+        mols.append((_os.path.basename(p), vol_c))
+
+    if not mols:
+        q.put({"occ": 0.0, "inserted": 0, "runtime": _t.time()-start,
+               "stop": "no-molecules", "pmer_fails": None})
+        return
+
+    g_thresh    = mols[0][1].max() * PROTEIN_ISO_THRESHOLD_RATIO
+    tetris      = Tetris3D(dimensions=voi_shape, threshold=g_thresh)
+    total       = 0
+    target_hit  = False
+    seed_fails  = 0
+
+    for _, (name, vol) in enumerate(mols, 1):
+        if float(tetris.get_occupancy()) * 100.0 >= target_occ:
+            target_hit = True; break
+        bsize  = max(vol.shape)
+        seed   = pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
+        if seed is None:
+            seed_fails += 1
+            continue
+        fails  = 0
+        while fails < TRIES_CLUSTERING:
+            if float(tetris.get_occupancy()) * 100.0 >= target_occ:
+                target_hit = True; break
+            rot, _  = ImageProcessing3D.randomly_rotate(vol)
+            rbin    = ImageProcessing3D.smooth_and_binarize(rot, 1.5, g_thresh)
+            tmpl, _, _ = ImageProcessing3D.create_in_shell(rbin, (0, 2), penalty=100)
+            res = tetris.insert_molecule_3d(tmpl, rot, name, allowed, seed, bsize)
+            if res == "inserted":
+                total += 1; fails = 0
+                seed = tetris.all_coordinates[-1]
+            else:
+                fails += 1
+                seed = pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
+                if seed is None:
+                    seed_fails += 1
+                    break
+        else:
+            seed_fails += 1  # agotó TRIES_CLUSTERING sin insertar
+        if target_hit: break
+
+    q.put({"occ":      float(tetris.get_occupancy()) * 100.0,
+           "inserted": total,
+           "runtime":  _t.time() - start,
+           "stop":     "target-reached" if target_hit else "saturation",
+           "pmer_fails": seed_fails})
 
 
-def set_voi_shape_in_script(script_path: Path, shape: tuple) -> None:
-    """Parchea VOI_SHAPE = (z, y, x) — soporta tanto inline como multilínea."""
-    text = read_text(script_path)
-    replacement = f"VOI_SHAPE = {shape!r}"
-    new_text, count = re.subn(
-        r"VOI_SHAPE\s*=\s*\([\s\S]*?\)",
-        replacement,
-        text,
-        count=1,
-    )
-    if count != 1:
-        raise RuntimeError(f"No se pudo actualizar VOI_SHAPE en {script_path}")
-    write_text(script_path, new_text)
+def _sawlc_sci_worker(proteins: list, voi_shape: tuple, target_occ: float, q) -> None:
+    """Corre SAWLC con polnet y se detiene al alcanzar target_occ."""
+    import sys as _sys, io as _io, re as _re, time as _t
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "sawlc"))
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
+
+    import numpy as _np
+    from polnet.sample import SyntheticSample, PnFile
+    from insert_proteins_tetris import ROOT_PATH, sorted_proteinSizes
+
+    start  = _t.time()
+    sample = SyntheticSample(shape=voi_shape, v_size=10, offset=(0, 0, 0))
+
+    buf = _io.StringIO()
+    old = _sys.stdout; _sys.stdout = buf
+    stop_reason = "saturation"
+    try:
+        for p_path in sorted_proteinSizes(proteins):
+            voi_check = sample._SyntheticSample__voi
+            if 100.0 * float(_np.count_nonzero(~voi_check)) / voi_check.size >= target_occ:
+                stop_reason = "target-reached"
+                break
+            pn_params = PnFile().load(ROOT_PATH / p_path)
+            sample.add_set_cproteins(
+                params=pn_params,
+                data_path=ROOT_PATH,
+                surf_dec=0.9,
+                mmer_tries=20,
+                pmer_tries=100,
+                verbosity=False,
+            )
+    finally:
+        _sys.stdout = old
+
+    elapsed = _t.time() - start
+    txt     = buf.getvalue()
+
+    voi  = sample._SyntheticSample__voi
+    occ  = 100.0 * float(_np.count_nonzero(~voi)) / voi.size
+
+    m_ins   = _re.search(r"Total proteinas insertadas:\s*(\d+)", txt)
+    m_fails = _re.search(r"Pmer fails:\s*(\d+)", txt)
+    inserted   = int(m_ins.group(1))   if m_ins   else None
+    pmer_fails = int(m_fails.group(1)) if m_fails else None
+
+    if stop_reason == "saturation" and pmer_fails:
+        stop_reason = "attempt-limit"
+    q.put({"occ": occ, "inserted": inserted, "runtime": elapsed,
+           "stop": stop_reason, "pmer_fails": pmer_fails})
 
 
-def set_proteins_list_in_script(script_path: Path, proteins: List[str]) -> None:
-    text = read_text(script_path)
-    block = "PROTEINS_LIST = [\n" + "\n".join([f'    "{p}",' for p in proteins]) + "\n]\n"
-    new_text, count = re.subn(
-        r"PROTEINS_LIST\s*=\s*\[(?:.|\n)*?\]\n",
-        block,
-        text,
-        count=1,
-    )
-    if count != 1:
-        raise RuntimeError(f"No se pudo actualizar PROTEINS_LIST en {script_path}")
-    write_text(script_path, new_text)
+# ─── Orquestación ─────────────────────────────────────────────────────────────
+
+def _spawn(target, args) -> dict:
+    ctx = mp.get_context("spawn")
+    q   = ctx.Queue()
+    p   = ctx.Process(target=target, args=(*args, q))
+    p.start(); p.join()
+    return q.get()
 
 
-def compute_binary_occupancy_percent(label_path: Path) -> Optional[float]:
-    if not label_path.exists():
-        return None
-    with mrcfile.open(label_path, permissive=True) as mrc:
-        vol = np.asarray(mrc.data)
-    if vol.size == 0:
-        return None
-    return 100.0 * np.count_nonzero(vol > 0) / vol.size
+def _run_algo(algo: str, proteins: list, target_pct: float, rep: int) -> RunMetrics:
+    print(f"\n  [{algo.upper()}] target={target_pct:.1f}% rep={rep}…")
 
-
-def parse_inserted(stdout: str, algo: str) -> Optional[int]:
-    if algo == "sawlc":
-        m = re.search(r"Total proteinas insertadas:\s*(\d+)", stdout)
-    else:
-        m = re.search(r"DONE:\s*(\d+)\s*inserted", stdout)
-    return int(m.group(1)) if m else None
-
-
-def parse_tetris_occupancy(stdout: str) -> Optional[float]:
-    """Extrae total_occ del stdout de insert_proteins_tetris.py."""
-    m = re.search(r"total_occ\s*=\s*([\d.]+)%", stdout)
-    return float(m.group(1)) if m else None
-
-
-def parse_pmer_fails(stdout: str) -> Optional[int]:
-    m = re.search(r"Pmer fails:\s*(\d+)", stdout)
-    return int(m.group(1)) if m else None
-
-
-def parse_stop_reason(stdout: str, algo: str, occ: Optional[float], target_percent: float) -> str:
-    s = stdout.lower()
     if algo == "tetris":
-        if "stop_reason = target-reached" in s:
-            return "target-reached"
-        if "stop_reason = saturation" in s:
-            return "saturation"
-        if occ is not None and occ >= target_percent:
-            return "target-reached"
-        return "unknown"
-
-    # SAWLC: inferencia por resultado final
-    if occ is not None and occ >= target_percent:
-        return "target-reached"
-    if "pmer fails" in s:
-        return "attempt-limit"
-    return "unknown"
-
-
-def run_algo(algo: str, target_percent: float, repeat_id: int) -> RunMetrics:
-    if algo == "sawlc":
-        cmd, cwd, label = SAWLC_CMD, SAWLC_CWD, SAWLC_LABEL
+        d = _spawn(_tetris_sci_worker, (proteins, BENCHMARK_VOI_SHAPE, target_pct))
     else:
-        cmd, cwd, label = TETRIS_CMD, TETRIS_CWD, TETRIS_LABEL
+        d = _spawn(_sawlc_sci_worker,  (proteins, BENCHMARK_VOI_SHAPE, target_pct))
 
-    start = time.time()
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(cwd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout_lines, stderr_lines = [], []
-    for line in proc.stdout:
-        print(f"  [{algo.upper()}] {line}", end="")
-        stdout_lines.append(line)
-    proc.wait()
-    stderr_lines = proc.stderr.read().splitlines(keepends=True)
-    runtime = time.time() - start
+    rt  = d["runtime"]
+    ins = d["inserted"]
+    occ = d["occ"]
+    tpi = (rt / ins)     if ins and ins > 0 else None
+    pps = (ins / rt)     if ins and rt > 0  else None
+    sat = d["stop"] not in {"target-reached"}
 
-    stdout = "".join(stdout_lines)
-    stderr = "".join(stderr_lines)
-
-    if label is not None:
-        occ = compute_binary_occupancy_percent(label)
-    else:
-        occ = parse_tetris_occupancy(stdout)
-    inserted = parse_inserted(stdout, algo)
-    pmer_fails = parse_pmer_fails(stdout) if algo == "sawlc" else None
-
-    stop_reason = parse_stop_reason(stdout, algo, occ, target_percent)
-    saturated = stop_reason in {"saturation", "attempt-limit"}
-
-    tpi = None if (inserted is None or inserted <= 0 or runtime <= 0) else runtime / inserted
-    pps = None if (inserted is None or runtime <= 0) else inserted / runtime
-
-    stamp = f"{algo}_t{int(target_percent)}_r{repeat_id}"
-    (OUT_REPORT / f"{stamp}.stdout.log").write_text(stdout, encoding="utf-8")
-    (OUT_REPORT / f"{stamp}.stderr.log").write_text(stderr, encoding="utf-8")
-
+    print(f"  [{algo.upper()}] occ={occ:.2f}%  ins={ins}  t={rt:.1f}s  stop={d['stop']}")
     return RunMetrics(
-        algorithm=algo,
-        target_percent=target_percent,
-        repeat_id=repeat_id,
-        runtime_seconds=runtime,
-        occupancy_percent_binary=occ,
-        proteins_inserted=inserted,
-        time_per_insertion_seconds=tpi,
-        proteins_per_second=pps,
-        pmer_fails=pmer_fails,
-        stop_reason=stop_reason,
-        saturated=saturated,
-        exit_code=proc.returncode,
+        algorithm=algo, target_percent=target_pct, repeat_id=rep,
+        runtime_seconds=rt, occupancy_percent=occ,
+        proteins_inserted=ins, time_per_insertion_seconds=tpi,
+        proteins_per_second=pps, pmer_fails=d["pmer_fails"],
+        stop_reason=d["stop"], saturated=sat,
     )
 
 
-def mean_valid(values: List[Optional[float]]) -> float:
-    clean = [v for v in values if v is not None]
+# ─── Tabla / resumen ──────────────────────────────────────────────────────────
+
+def _mean(vals):
+    clean = [v for v in vals if v is not None]
     return float(np.mean(clean)) if clean else float("nan")
 
-
-def std_valid(values: List[Optional[float]]) -> float:
-    clean = [v for v in values if v is not None]
+def _std(vals):
+    clean = [v for v in vals if v is not None]
     return float(np.std(clean)) if clean else float("nan")
 
 
-def print_table(rows: List[RunMetrics]) -> None:
-    print("\n" + "=" * 144)
+def _print_table(rows: list) -> None:
+    print("\n" + "="*130)
     print("BENCHMARK CIENTÍFICO: SAWLC vs TETRIS")
-    print("=" * 144)
-    print(
-        f"{'Algo':<8} {'Target%':>8} {'Rep':>5} {'Occ%':>8} {'Prot':>8} {'Time(s)':>10} "
-        f"{'s/Prot':>10} {'Prot/s':>10} {'Fails':>8} {'Stop':>14} {'Sat?':>6} {'Exit':>6}"
-    )
-    print("-" * 144)
-
+    print("="*130)
+    hdr = f"{'Algo':<8} {'Target%':>8} {'Rep':>4} {'Occ%':>8} {'Prot':>7} {'Time(s)':>9} {'s/Prot':>9} {'Prot/s':>9} {'Fails':>7} {'Stop':>14} {'Sat':>5}"
+    print(hdr); print("-"*130)
     for r in rows:
-        occ = "NA" if r.occupancy_percent_binary is None else f"{r.occupancy_percent_binary:.2f}"
-        prot = "NA" if r.proteins_inserted is None else str(r.proteins_inserted)
-        tpi = "NA" if r.time_per_insertion_seconds is None else f"{r.time_per_insertion_seconds:.4f}"
-        pps = "NA" if r.proteins_per_second is None else f"{r.proteins_per_second:.3f}"
-        fails = "NA" if r.pmer_fails is None else str(r.pmer_fails)
-        sat = "yes" if r.saturated else "no"
-
         print(
-            f"{r.algorithm:<8} {r.target_percent:>8.1f} {r.repeat_id:>5d} {occ:>8} {prot:>8} {r.runtime_seconds:>10.2f} "
-            f"{tpi:>10} {pps:>10} {fails:>8} {r.stop_reason:>14} {sat:>6} {r.exit_code:>6}"
+            f"{r.algorithm:<8} {r.target_percent:>8.1f} {r.repeat_id:>4d}"
+            f" {'NA' if r.occupancy_percent is None else f'{r.occupancy_percent:.2f}':>8}"
+            f" {'NA' if r.proteins_inserted is None else str(r.proteins_inserted):>7}"
+            f" {r.runtime_seconds:>9.2f}"
+            f" {'NA' if r.time_per_insertion_seconds is None else f'{r.time_per_insertion_seconds:.4f}':>9}"
+            f" {'NA' if r.proteins_per_second is None else f'{r.proteins_per_second:.3f}':>9}"
+            f" {'NA' if r.pmer_fails is None else str(r.pmer_fails):>7}"
+            f" {r.stop_reason:>14} {'yes' if r.saturated else 'no':>5}"
         )
-
-    print("=" * 144)
-
-
-def build_summary(rows: List[RunMetrics]) -> Dict[str, Dict[str, Dict[str, float]]]:
-    out: Dict[str, Dict[str, Dict[str, float]]] = {"sawlc": {}, "tetris": {}}
-    for algo in ("sawlc", "tetris"):
-        vals_algo = [r for r in rows if r.algorithm == algo]
-        for target in sorted({r.target_percent for r in vals_algo}):
-            vals = [r for r in vals_algo if r.target_percent == target]
-            out[algo][str(target)] = {
-                "mean_occupancy_percent": mean_valid([r.occupancy_percent_binary for r in vals]),
-                "std_occupancy_percent": std_valid([r.occupancy_percent_binary for r in vals]),
-                "mean_runtime_seconds": mean_valid([r.runtime_seconds for r in vals]),
-                "std_runtime_seconds": std_valid([r.runtime_seconds for r in vals]),
-                "mean_time_per_insertion_seconds": mean_valid([r.time_per_insertion_seconds for r in vals]),
-                "mean_proteins_per_second": mean_valid([r.proteins_per_second for r in vals]),
-                "mean_proteins_inserted": mean_valid([None if r.proteins_inserted is None else float(r.proteins_inserted) for r in vals]),
-                "mean_pmer_fails": mean_valid([None if r.pmer_fails is None else float(r.pmer_fails) for r in vals]),
-            }
-    return out
+    print("="*130)
 
 
-def generate_plots(rows: List[RunMetrics]) -> None:
-    def rows_by(algo: str, target: float) -> List[RunMetrics]:
-        return [r for r in rows if r.algorithm == algo and r.target_percent == target]
+# ─── Gráficas ─────────────────────────────────────────────────────────────────
 
+def _generate_plots(rows: list) -> None:
     targets = sorted({r.target_percent for r in rows})
 
-    # Curvas promedio por target
-    saw_occ = [mean_valid([r.occupancy_percent_binary for r in rows_by("sawlc", t)]) for t in targets]
-    tet_occ = [mean_valid([r.occupancy_percent_binary for r in rows_by("tetris", t)]) for t in targets]
+    def by(algo, t):
+        return [r for r in rows if r.algorithm == algo and r.target_percent == t]
 
-    saw_time = [mean_valid([r.runtime_seconds for r in rows_by("sawlc", t)]) for t in targets]
-    tet_time = [mean_valid([r.runtime_seconds for r in rows_by("tetris", t)]) for t in targets]
+    saw_occ      = [_mean([r.occupancy_percent  for r in by("sawlc",  t)]) for t in targets]
+    tet_occ      = [_mean([r.occupancy_percent  for r in by("tetris", t)]) for t in targets]
+    saw_occ_std  = [_std( [r.occupancy_percent  for r in by("sawlc",  t)]) for t in targets]
+    tet_occ_std  = [_std( [r.occupancy_percent  for r in by("tetris", t)]) for t in targets]
 
-    saw_tpi = [mean_valid([r.time_per_insertion_seconds for r in rows_by("sawlc", t)]) for t in targets]
-    tet_tpi = [mean_valid([r.time_per_insertion_seconds for r in rows_by("tetris", t)]) for t in targets]
+    saw_time     = [_mean([r.runtime_seconds    for r in by("sawlc",  t)]) for t in targets]
+    tet_time     = [_mean([r.runtime_seconds    for r in by("tetris", t)]) for t in targets]
+    saw_time_std = [_std( [r.runtime_seconds    for r in by("sawlc",  t)]) for t in targets]
+    tet_time_std = [_std( [r.runtime_seconds    for r in by("tetris", t)]) for t in targets]
 
-    saw_fail = [mean_valid([None if r.pmer_fails is None else float(r.pmer_fails) for r in rows_by("sawlc", t)]) for t in targets]
+    saw_tpi      = [_mean([r.time_per_insertion_seconds for r in by("sawlc",  t)]) for t in targets]
+    tet_tpi      = [_mean([r.time_per_insertion_seconds for r in by("tetris", t)]) for t in targets]
+    saw_tpi_std  = [_std( [r.time_per_insertion_seconds for r in by("sawlc",  t)]) for t in targets]
+    tet_tpi_std  = [_std( [r.time_per_insertion_seconds for r in by("tetris", t)]) for t in targets]
 
-    # Estilo robusto: usar seaborn si está disponible, si no fallback seguro
+    saw_fail     = [_mean([float(r.pmer_fails) if r.pmer_fails is not None else float("nan")
+                           for r in by("sawlc", t)]) for t in targets]
+    saw_fail_std = [_std( [float(r.pmer_fails) if r.pmer_fails is not None else float("nan")
+                           for r in by("sawlc", t)]) for t in targets]
+
     try:
         plt.style.use("seaborn-v0_8-darkgrid")
     except OSError:
-        available = set(plt.style.available)
-        if "seaborn-darkgrid" in available:
-            plt.style.use("seaborn-darkgrid")
-        elif "ggplot" in available:
-            plt.style.use("ggplot")
-        else:
-            plt.style.use("default")
+        plt.style.use("ggplot")
+
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Benchmark científico SAWLC vs Tetris", fontsize=15, fontweight="bold")
+    fig.suptitle("SAWLC vs Tetris", fontsize=15, fontweight="bold")
 
-    # 1) Packing fraction
     ax = axes[0, 0]
-    ax.plot(targets, saw_occ, "o-", linewidth=2, label="SAWLC")
-    ax.plot(targets, tet_occ, "s-", linewidth=2, label="Tetris")
-    ax.plot(targets, targets, "k--", alpha=0.5, label="Objetivo")
+    t_ext     = [0] + list(targets)
+    saw_occ_x = [0.0] + saw_occ;  saw_std_x = [0.0] + saw_occ_std
+    tet_occ_x = [0.0] + tet_occ;  tet_std_x = [0.0] + tet_occ_std
+    ax.errorbar(t_ext, saw_occ_x, yerr=saw_std_x, fmt="o-", lw=2, capsize=4, label="SAWLC")
+    ax.errorbar(t_ext, tet_occ_x, yerr=tet_std_x, fmt="s-", lw=2, capsize=4, label="Tetris")
+    ax.axline((0, 0), slope=1, color="k", ls="--", lw=1.5, alpha=0.8, zorder=10, label="Objetivo (y=x)")
     ax.set_title("Densidad alcanzada (packing fraction)")
-    ax.set_xlabel("Ocupancia objetivo (%)")
-    ax.set_ylabel("Ocupancia final binaria (%)")
+    ax.set_xlabel("Ocupancia objetivo (%)"); ax.set_ylabel("Ocupancia final binaria (%)")
     ax.legend()
 
-    # 2) Tiempo total
     ax = axes[0, 1]
-    ax.plot(targets, saw_time, "o-", linewidth=2, label="SAWLC")
-    ax.plot(targets, tet_time, "s-", linewidth=2, label="Tetris")
+    ax.errorbar(targets, saw_time, yerr=saw_time_std, fmt="o-", lw=2, capsize=4, label="SAWLC")
+    ax.errorbar(targets, tet_time, yerr=tet_time_std, fmt="s-", lw=2, capsize=4, label="Tetris")
     ax.set_title("Tiempo total por target")
-    ax.set_xlabel("Ocupancia objetivo (%)")
-    ax.set_ylabel("Tiempo (s)")
+    ax.set_xlabel("Ocupancia objetivo (%)"); ax.set_ylabel("Tiempo (s)")
     ax.legend()
 
-    # 3) Tiempo por inserción exitosa
     ax = axes[1, 0]
-    ax.plot(targets, saw_tpi, "o-", linewidth=2, label="SAWLC")
-    ax.plot(targets, tet_tpi, "s-", linewidth=2, label="Tetris")
+    ax.errorbar(targets, saw_tpi, yerr=saw_tpi_std, fmt="o-", lw=2, capsize=4, label="SAWLC")
+    ax.errorbar(targets, tet_tpi, yerr=tet_tpi_std, fmt="s-", lw=2, capsize=4, label="Tetris")
     ax.set_title("Tiempo por inserción exitosa")
-    ax.set_xlabel("Ocupancia objetivo (%)")
-    ax.set_ylabel("s / proteína")
+    ax.set_xlabel("Ocupancia objetivo (%)"); ax.set_ylabel("s / proteína")
     ax.legend()
 
-    # 4) Fallos
     ax = axes[1, 1]
-    w = 0.6
+    tet_fail     = [_mean([float(r.pmer_fails) if r.pmer_fails is not None else float("nan")
+                           for r in by("tetris", t)]) for t in targets]
+    tet_fail_std = [_std( [float(r.pmer_fails) if r.pmer_fails is not None else float("nan")
+                           for r in by("tetris", t)]) for t in targets]
     x = np.arange(len(targets), dtype=float)
-    ax.bar(x, saw_fail, width=w, label="SAWLC pmer_fails")
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(int(t)) for t in targets])
-    ax.set_title("Fallos de SAWLC (pmer_fails)")
-    ax.set_xlabel("Ocupancia objetivo (%)")
-    ax.set_ylabel("valor promedio")
+    w = 0.3
+    ax.bar(x - w/2, saw_fail, w, yerr=saw_fail_std, capsize=4, label="SAWLC pmer_fails")
+    ax.bar(x + w/2, tet_fail, w, yerr=tet_fail_std, capsize=4, label="Tetris seed_fails")
+    ax.set_xticks(x); ax.set_xticklabels([str(int(t)) for t in targets])
+    ax.set_title("Fallos de inserción acumulados")
+    ax.set_xlabel("Ocupancia objetivo (%)"); ax.set_ylabel("Fallos (promedio)")
     ax.legend(fontsize=9)
 
     plt.tight_layout()
-    plt.savefig(OUT_REPORT / "benchmark_scientific_plots.png", dpi=180)
-    plt.close()
+    out = OUT_REPORT / "benchmark_scientific_plots.png"
+    plt.savefig(out, dpi=180); plt.close()
+    print(f"\n[OK] Gráfica: {out}")
 
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     OUT_REPORT.mkdir(parents=True, exist_ok=True)
 
-    sawlc_original = read_text(SAWLC_SCRIPT)
-
     proteins = PROTEIN_FILE if isinstance(PROTEIN_FILE, list) else [PROTEIN_FILE]
-    pns_path = DATA / proteins[0]
-    if not pns_path.exists():
-        raise FileNotFoundError(f"No existe proteína de benchmark: {pns_path}")
 
-    original_occ = get_pns_value(pns_path, "PMER_OCC")
-    original_lmax = get_pns_value(pns_path, "PMER_L_MAX")
+    current_config = {
+        "protein_file":    PROTEIN_FILE,
+        "targets_percent": TARGETS_PERCENT,
+        "repeats":         REPEATS_PER_TARGET,
+        "voi_shape":       list(BENCHMARK_VOI_SHAPE),
+        "sawlc_short_chain": FORCE_SAWLC_SHORT_CHAIN,
+    }
+    out_json = OUT_REPORT / "benchmark_scientific_report.json"
 
-    rows: List[RunMetrics] = []
+    # ── Intentar cargar caché ─────────────────────────────────────────────────
+    if out_json.exists():
+        cached = json.loads(out_json.read_text(encoding="utf-8"))
+        if cached.get("config") == current_config:
+            print(f"[CACHE] Config coincide — cargando resultados de {out_json}")
+            rows = [RunMetrics(**r) for r in cached["rows"]]
+            _print_table(rows)
+            _generate_plots(rows)
+            return
+        print("[CACHE] Config cambió — re-ejecutando simulaciones…")
 
+    # ── Ejecutar simulaciones ─────────────────────────────────────────────────
+    pns_paths = [DATA / p for p in proteins]
+    missing = [str(p) for p in pns_paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"No existen: {missing}")
+
+    orig_occs  = {p: _get_pns(DATA / p, "PMER_OCC")   for p in proteins}
+    orig_lmaxs = {p: _get_pns(DATA / p, "PMER_L_MAX") for p in proteins}
+
+    rows: list = []
     try:
-        # Igualar proteína y VOI en ambos algoritmos
-        set_proteins_list_in_script(SAWLC_SCRIPT, proteins)
-        set_proteins_list_in_script(TETRIS_SCRIPT, proteins)
-        set_voi_shape_in_script(SAWLC_SCRIPT, BENCHMARK_VOI_SHAPE)
-        set_voi_shape_in_script(TETRIS_SCRIPT, BENCHMARK_VOI_SHAPE)
-
-        # SAWLC casi monómero
         if FORCE_SAWLC_SHORT_CHAIN:
-            set_pns_value(pns_path, "PMER_L_MAX", str(SHORT_CHAIN_PMER_L_MAX))
+            for p in proteins:
+                _set_pns(DATA / p, "PMER_L_MAX", str(SHORT_CHAIN_PMER_L_MAX))
 
         for target in TARGETS_PERCENT:
-            set_pns_value(pns_path, "PMER_OCC", str(target / 100.0))
-            # Tetris runner usa TARGET_OCC para parar en el mismo objetivo
-            set_var_in_script(TETRIS_SCRIPT, "TARGET_OCC", str(target / 100.0))
-
+            for p in proteins:
+                _set_pns(DATA / p, "PMER_OCC", str(target / 100.0))
             for rep in range(1, REPEATS_PER_TARGET + 1):
                 print(f"\n[RUN] target={target:.1f}% | rep={rep}")
-                rows.append(run_algo("sawlc", target, rep))
-                rows.append(run_algo("tetris", target, rep))
+                rows.append(_run_algo("sawlc",  proteins, target, rep))
+                rows.append(_run_algo("tetris", proteins, target, rep))
 
-        print_table(rows)
-        summary = build_summary(rows)
-        generate_plots(rows)
+        _print_table(rows)
+        _generate_plots(rows)
 
-        report = {
-            "config": {
-                "protein_file": PROTEIN_FILE,
-                "targets_percent": TARGETS_PERCENT,
-                "repeats_per_target": REPEATS_PER_TARGET,
-                "force_sawlc_short_chain": FORCE_SAWLC_SHORT_CHAIN,
-                "short_chain_pmer_l_max": SHORT_CHAIN_PMER_L_MAX,
-                "voi_shape": list(BENCHMARK_VOI_SHAPE),
-            },
-            "rows": [asdict(r) for r in rows],
-            "summary": summary,
-            "plots": [str(OUT_REPORT / "benchmark_scientific_plots.png")],
-        }
+        summary: Dict = {"sawlc": {}, "tetris": {}}
+        for algo in ("sawlc", "tetris"):
+            for t in TARGETS_PERCENT:
+                vals = [r for r in rows if r.algorithm == algo and r.target_percent == t]
+                summary[algo][str(t)] = {
+                    "mean_occ":        _mean([r.occupancy_percent for r in vals]),
+                    "std_occ":         _std( [r.occupancy_percent for r in vals]),
+                    "mean_runtime":    _mean([r.runtime_seconds   for r in vals]),
+                    "mean_tpi":        _mean([r.time_per_insertion_seconds for r in vals]),
+                    "mean_pps":        _mean([r.proteins_per_second        for r in vals]),
+                    "mean_inserted":   _mean([float(r.proteins_inserted) if r.proteins_inserted else None for r in vals]),
+                    "mean_pmer_fails": _mean([float(r.pmer_fails) if r.pmer_fails else None for r in vals]),
+                }
 
-        out_json = OUT_REPORT / "benchmark_scientific_report.json"
+        report = {"config": current_config, "rows": [asdict(r) for r in rows], "summary": summary}
         out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-
-        print(f"\n[OK] Reporte JSON: {out_json}")
-        print(f"[OK] Gráficas: {OUT_REPORT / 'benchmark_scientific_plots.png'}")
+        print(f"[OK] Reporte: {out_json}")
 
     finally:
-        # Restaurar SAWLC (script original); tetris_runner.py es nuestro, se restaura solo
-        write_text(SAWLC_SCRIPT, sawlc_original)
-
-        # Restaurar .pns
-        if original_occ is not None:
-            set_pns_value(pns_path, "PMER_OCC", original_occ)
-        if original_lmax is not None:
-            set_pns_value(pns_path, "PMER_L_MAX", original_lmax)
-
-        print("[RESTORE] Scripts y .pns restaurados")
+        for p in proteins:
+            if orig_occs.get(p):  _set_pns(DATA / p, "PMER_OCC",   orig_occs[p])
+            if orig_lmaxs.get(p): _set_pns(DATA / p, "PMER_L_MAX", orig_lmaxs[p])
+        print("[RESTORE] .pns restaurados")
 
 
 if __name__ == "__main__":
