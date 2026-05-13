@@ -25,29 +25,24 @@ Timeline = List[Tuple[float, float]]
 
 def _tetris_profile_worker(force_cpu: bool, q) -> None:
     """Corre Tetris con monkey-patch en _correlate y devuelve (timeline, total_time)."""
+    import sys as _sys, time as _t
     if force_cpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-    import sys as _sys, time as _t
+        _sys.modules["cupy"]  = None  # type: ignore[assignment]
+        _sys.modules["cupyx"] = None  # type: ignore[assignment]
     from pathlib import Path as _P
     _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
 
     import numpy as _np
     from image_processing_3d import ImageProcessing3D
     from parser_3d import Parser3D
-    import tetris as tetris_mod
-    from tetris import Tetris3D, xp, GPU_AVAILABLE
+    from tetris import Tetris3D, xp
     from insert_proteins_tetris import (
         MEMBRANES_PATH, MEMBRANE_FILES, PROTEINS_LIST,
         VOI_SHAPE, ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
         sorted_proteinSizes,
     )
     import lio
-
-    def _sync():
-        if GPU_AVAILABLE:
-            import cupy as cp
-            cp.cuda.Stream.null.synchronize()
 
     def _pick_seed(allowed_mask, output_volume, threshold, box_size):
         half = box_size // 2
@@ -72,6 +67,7 @@ def _tetris_profile_worker(force_cpu: bool, q) -> None:
     molecules = []
     for p_path in sorted_proteinSizes(PROTEINS_LIST):
         vol, _ = Parser3D.load_protein(str(ROOT_PATH / p_path), str(ROOT_PATH))
+        vol = xp.asarray(vol)
         coords = xp.argwhere(vol > vol.max() * PROTEIN_ISO_THRESHOLD_RATIO)
         if coords.size == 0:
             continue
@@ -87,47 +83,28 @@ def _tetris_profile_worker(force_cpu: bool, q) -> None:
     tetris   = Tetris3D(dimensions=mem_vol.shape, threshold=g_thresh)
     tetris.output_volume[~allowed] = 500.0
 
-    totals = {"fft_correlation": 0.0, "insert_molecule_total": 0.0}
     timeline: Timeline = []
     t0_global = _t.perf_counter()
 
-    orig_correlate = tetris_mod._correlate
-
-    def _timed_correlate(local_bin, template):
-        t0 = _t.perf_counter()
-        out = orig_correlate(local_bin, template)
-        _sync()
-        totals["fft_correlation"] += _t.perf_counter() - t0
-        return out
-
-    tetris_mod._correlate = _timed_correlate
-    try:
-        for _, (_, vol) in enumerate(molecules, 1):
-            bsize = max(vol.shape)
-            seed  = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
-            fails = 0
-            while fails < TRIES_CLUSTERING:
-                if seed is None:
-                    break
-                rot, _  = ImageProcessing3D.randomly_rotate(vol)
-                _sync()
-                rbin    = ImageProcessing3D.smooth_and_binarize(rot, 1.5, g_thresh)
-                tmpl, _, _ = ImageProcessing3D.create_in_shell(rbin, (0, 2), penalty=100)
-                _sync()
-                t0 = _t.perf_counter()
-                res = tetris.insert_molecule_3d(tmpl, rot, "", allowed, seed, bsize)
-                _sync()
-                totals["insert_molecule_total"] += _t.perf_counter() - t0
-                if res == "inserted":
-                    occ = float(tetris.get_occupancy() * 100.0)
-                    timeline.append((_t.perf_counter() - t0_global, occ))
-                    fails = 0
-                    seed  = tetris.all_coordinates[-1]
-                else:
-                    fails += 1
-                    seed  = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
-    finally:
-        tetris_mod._correlate = orig_correlate
+    for _, (_, vol) in enumerate(molecules, 1):
+        bsize = max(vol.shape)
+        seed  = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
+        fails = 0
+        while fails < TRIES_CLUSTERING:
+            if seed is None:
+                break
+            rot, _  = ImageProcessing3D.randomly_rotate(vol)
+            rbin    = ImageProcessing3D.smooth_and_binarize(rot, 1.5, g_thresh)
+            tmpl, _, _ = ImageProcessing3D.create_in_shell(rbin, (0, 2), penalty=100)
+            res = tetris.insert_molecule_3d(tmpl, rot, "", allowed, seed, bsize)
+            if res == "inserted":
+                occ = float(tetris.get_occupancy() * 100.0)
+                timeline.append((_t.perf_counter() - t0_global, occ))
+                fails = 0
+                seed  = tetris.all_coordinates[-1]
+            else:
+                fails += 1
+                seed  = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
 
     total_time = _t.perf_counter() - t0_global
     q.put((timeline, total_time))
