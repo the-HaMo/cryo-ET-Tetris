@@ -21,7 +21,7 @@ _OUTPUT    = _BENCHMARK.parents[1] / "data" / "data_generated" / "output"
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 TOMO_ID        = 3
-MEMBRANE_FILE: Optional[str] = "tomo_mem_lbls_3.mrc"   # None → sin membrana
+MEMBRANE_FILE: Optional[str] = None   # None → sin membrana
 MEMBRANE_LEVEL = 11.5450
 
 PROTEINS_ALL: List[str] = [
@@ -47,22 +47,27 @@ _CACHE     = _BENCHMARK / f"cache_tomo{TOMO_ID}_{_escenario}.json"
 
 def _tetris_worker(proteins: list, membrane_file, force_cpu: bool, q) -> None:
     """Corre Tetris con todas las proteínas y devuelve métricas por tipo."""
-    import sys as _sys, os as _os, time as _t
+    import sys as _sys, os as _os, io as _io, time as _t
+    from pathlib import Path as _P
+
+    # GPU control must happen before any GPU-dependent import
     if force_cpu:
         _os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         _sys.modules["cupy"]  = None  # type: ignore[assignment]
         _sys.modules["cupyx"] = None  # type: ignore[assignment]
-    from pathlib import Path as _P
+
     _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
+
+    # import insert_proteins_tetris FIRST — runs its USE_GPU control code before cupy is imported
+    from insert_proteins_tetris import (
+        pick_seed, sorted_proteinSizes, crop_volume,
+        ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
+    )
 
     import numpy as _np
     from tetris import Tetris3D, xp
     from image_processing_3d import ImageProcessing3D
     from parser_3d import Parser3D
-    from insert_proteins_tetris import (
-        pick_seed, sorted_proteinSizes, crop_volume,
-        ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
-    )
     import lio
 
     t_global = _t.time()
@@ -91,8 +96,6 @@ def _tetris_worker(proteins: list, membrane_file, force_cpu: bool, q) -> None:
     g_thresh = max(float(v.max()) for _, v in mols) * PROTEIN_ISO_THRESHOLD_RATIO
     tetris   = Tetris3D(dimensions=tuple(mem.shape), threshold=g_thresh)
     tetris.output_volume[~allowed] = 500.0
-
-    import io as _io
 
     monomers: dict = {}
     total   = 0
@@ -135,7 +138,8 @@ def _tetris_worker(proteins: list, membrane_file, force_cpu: bool, q) -> None:
             "occ_after": occ_now,
         })
         tag = "CPU" if force_cpu else "GPU"
-        print(f"  [Tetris {tag}] {key}  ins={n}  occ={occ_now:.2f}%", flush=True)
+        _sys.__stdout__.write(f"  [Tetris {tag}] {key}  ins={n}  occ={occ_now:.2f}%\n")
+        _sys.__stdout__.flush()
 
     q.put({
         "occ":            float(tetris.get_occupancy()) * 100.0,
@@ -242,11 +246,6 @@ def _run_single_sim() -> dict:
 
     print(f"\n{'─'*60}\n[SIM] {len(PROTEINS_ALL)} proteínas\n{'─'*60}")
 
-    print("\n[SIM] SAWLC…")
-    sawlc = _spawn(_sawlc_worker, (PROTEINS_ALL, MEMBRANE_FILE))
-    print(f"      occ={sawlc['occ']:.2f}%  t={sawlc['time_min']:.2f}min  "
-          f"total={sawlc['total_monomers']}")
-
     if GPU_AVAILABLE:
         print("\n[SIM] Tetris GPU…")
         t_gpu = _spawn(_tetris_worker, (PROTEINS_ALL, MEMBRANE_FILE, False))
@@ -260,6 +259,11 @@ def _run_single_sim() -> dict:
     t_cpu = _spawn(_tetris_worker, (PROTEINS_ALL, MEMBRANE_FILE, True))
     print(f"      occ={t_cpu['occ']:.2f}%  t={t_cpu['time_min']:.2f}min  "
           f"total={t_cpu['total_monomers']}")
+
+    print("\n[SIM] SAWLC…")
+    sawlc = _spawn(_sawlc_worker, (PROTEINS_ALL, MEMBRANE_FILE))
+    print(f"      occ={sawlc['occ']:.2f}%  t={sawlc['time_min']:.2f}min  "
+          f"total={sawlc['total_monomers']}")
 
     return {
         "config": {"tomo_id": TOMO_ID, "membrane_file": MEMBRANE_FILE,

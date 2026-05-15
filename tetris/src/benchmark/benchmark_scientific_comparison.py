@@ -36,12 +36,13 @@ PROTEIN_FILE = [
     "in_10A/3d2f_10A.pns",
     "in_10A/1s3x_10A.pns"
 ]
-TARGETS_PERCENT   = [2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0, 27.5, 30.0, 32.5, 35.0, 37.5, 40.0, 42.5, 45.0, 47.5, 50.0, 52.5, 55.0]
-REPEATS_PER_TARGET = 2
+TARGETS_PERCENT   = [2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0, 27.5, 30.0, 32.5, 35.0, 37.5, 40.0, 42.5, 45.0, 47.5, 50.0, 52.5, 55.0, 57.5, 60.0, 62.5, 65.0, 67.5, 70.0]
+REPEATS_PER_TARGET = 1
 BENCHMARK_VOI_SHAPE = (500, 500, 250)   # reducir si hay OOM; usar (300,300,250) en GPU
 
 FORCE_SAWLC_SHORT_CHAIN = False
 SHORT_CHAIN_PMER_L_MAX  = 1
+BENCHMARK_USE_GPU       = True   # False para forzar CPU en el worker Tetris
 
 @dataclass
 class RunMetrics:
@@ -88,24 +89,57 @@ def _tetris_sci_worker(proteins: list, voi_shape: tuple, target_occ: float, q) -
     """Corre Tetris hasta target_occ y devuelve métricas."""
     import sys as _sys, os as _os, io as _io, time as _t
     from pathlib import Path as _P
+
+    # GPU control must happen before any GPU-dependent import
+    if not BENCHMARK_USE_GPU:
+        _os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+        _sys.modules["cupy"] = None
+        _sys.modules["cupyx"] = None
+
     _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
 
     try:
+        import numpy as _np
         from tetris import Tetris3D, xp
         from image_processing_3d import ImageProcessing3D
         from parser_3d import Parser3D
-        from insert_proteins_tetris import (
-            pick_seed, sorted_proteinSizes, crop_volume,
-            ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
-        )
+
+        # Self-contained helpers (no import of insert_proteins_tetris which has GPU side-effects)
+        _ROOT_PATH = _P(__file__).resolve().parents[2] / "data"
+        _ISO_RATIO  = 0.08
+        _TRIES      = 10
+
+        def _crop_volume(vol, threshold):
+            coords = _np.argwhere(vol > threshold)
+            if coords.size == 0: return vol
+            z0, y0, x0 = coords.min(axis=0)
+            z1, y1, x1 = coords.max(axis=0) + 1
+            return vol[z0:z1, y0:y1, x0:x1]
+
+        def _sorted_sizes(proteins_list):
+            def _occ(p):
+                vol, _ = Parser3D.load_protein(str(_ROOT_PATH / p), str(_ROOT_PATH))
+                return _np.count_nonzero(vol > vol.max() * _ISO_RATIO) / vol.size
+            return sorted(proteins_list, key=_occ, reverse=True)
+
+        def _pick_seed(allowed_mask, output_volume, threshold, box_size):
+            half = box_size // 2
+            z_dim, y_dim, x_dim = output_volume.shape
+            empty  = allowed_mask & (output_volume <= threshold)
+            viable = xp.zeros_like(empty, dtype=bool)
+            viable[half:z_dim-half, half:y_dim-half, half:x_dim-half] = \
+                empty[half:z_dim-half, half:y_dim-half, half:x_dim-half]
+            candidates = xp.argwhere(viable)
+            if len(candidates) == 0: return None
+            return tuple(int(x) for x in candidates[_np.random.randint(0, len(candidates))])
 
         start   = _t.time()
         allowed = xp.ones(voi_shape, dtype=bool)
 
         mols = []
-        for p in sorted_proteinSizes(proteins):
-            vol, _ = Parser3D.load_protein(str(ROOT_PATH / p), str(ROOT_PATH))
-            vol_c  = crop_volume(vol, vol.max() * PROTEIN_ISO_THRESHOLD_RATIO)
+        for p in _sorted_sizes(proteins):
+            vol, _ = Parser3D.load_protein(str(_ROOT_PATH / p), str(_ROOT_PATH))
+            vol_c  = _crop_volume(vol, vol.max() * _ISO_RATIO)
             mols.append((_os.path.basename(p), xp.asarray(vol_c)))
 
         if not mols:
@@ -113,25 +147,25 @@ def _tetris_sci_worker(proteins: list, voi_shape: tuple, target_occ: float, q) -
                    "stop": "no-molecules", "pmer_fails": None})
             return
 
-        g_thresh    = mols[0][1].max() * PROTEIN_ISO_THRESHOLD_RATIO
-        tetris      = Tetris3D(dimensions=voi_shape, threshold=g_thresh)
-        total       = 0
-        target_hit  = False
-        seed_fails  = 0
+        g_thresh   = mols[0][1].max() * _ISO_RATIO
+        tetris     = Tetris3D(dimensions=voi_shape, threshold=g_thresh)
+        total      = 0
+        target_hit = False
+        seed_fails = 0
 
         for _, (name, vol) in enumerate(mols, 1):
             if float(tetris.get_occupancy()) * 100.0 >= target_occ:
                 target_hit = True; break
-            bsize  = max(vol.shape)
-            seed   = pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
+            bsize = max(vol.shape)
+            seed  = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
             if seed is None:
                 seed_fails += 1
                 continue
-            fails  = 0
+            fails = 0
             buf = _io.StringIO()
             old = _sys.stdout; _sys.stdout = buf
             try:
-                while fails < TRIES_CLUSTERING:
+                while fails < _TRIES:
                     if float(tetris.get_occupancy()) * 100.0 >= target_occ:
                         target_hit = True; break
                     rot, _  = ImageProcessing3D.randomly_rotate(vol)
@@ -143,12 +177,12 @@ def _tetris_sci_worker(proteins: list, voi_shape: tuple, target_occ: float, q) -
                         seed = tetris.all_coordinates[-1]
                     else:
                         fails += 1
-                        seed = pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
+                        seed = _pick_seed(allowed, tetris.output_volume, g_thresh, bsize)
                         if seed is None:
                             seed_fails += 1
                             break
                 else:
-                    seed_fails += 1  # agotó TRIES_CLUSTERING sin insertar
+                    seed_fails += 1
             finally:
                 _sys.stdout = old
             occ_now = float(tetris.get_occupancy()) * 100.0

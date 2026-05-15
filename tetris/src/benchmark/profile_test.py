@@ -1,19 +1,16 @@
 """Profile Tetris 3D and render occupancy vs time with a time breakdown bar."""
 
-import sys
-import time
+import sys, time
 from pathlib import Path
 
 # Add tetris_3d directory to path so we can import its modules
 tetris_3d_dir = Path(__file__).parent.parent / "tetris_3d"
 sys.path.insert(0, str(tetris_3d_dir))
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
-import numpy as np
-
-from image_processing_3d import ImageProcessing3D
+# insert_proteins_tetris controla USE_GPU y bloquea CuPy si es necesario
+# antes de que image_processing_3d y tetris se importen
 from insert_proteins_tetris import (
+    USE_GPU,
     MEMBRANES_PATH,
     MEMBRANE_FILES,
     OUT_DIR,
@@ -27,6 +24,12 @@ from insert_proteins_tetris import (
     sorted_proteinSizes,
     pick_seed,
 )
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+import numpy as np
+
+from image_processing_3d import ImageProcessing3D
 from parser_3d import Parser3D
 import tetris as tetris_mod
 from tetris import Tetris3D, xp, GPU_AVAILABLE

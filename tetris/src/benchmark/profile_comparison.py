@@ -1,13 +1,12 @@
 """
-Curva de ocupancia acumulada: Tetris CPU vs Tetris GPU vs SAWLC.
+Curva de ocupancia acumulada: Tetris GPU vs Tetris CPU vs SAWLC.
 
-Genera una gráfica con las tres curvas de ocupancia vs tiempo.
-En máquinas sin GPU sólo se produce la curva Tetris CPU.
-No modifica ningún script fuente.
+GPU/CPU de Tetris se controla con USE_GPU en insert_proteins_tetris.py.
+Este script siempre lanza ambas curvas Tetris (GPU primero, luego CPU).
 """
 from __future__ import annotations
 
-import multiprocessing as mp, os, re
+import multiprocessing as mp, re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -23,20 +22,25 @@ Timeline = List[Tuple[float, float]]
 
 # ─── Worker Tetris (nivel de módulo — requerido por multiprocessing.spawn) ────
 
-def _tetris_profile_worker(force_cpu: bool, q) -> None:
-    """Corre Tetris con monkey-patch en _correlate y devuelve (timeline, total_time)."""
+def _tetris_profile_worker(use_gpu: bool, q) -> None:
+    """Corre Tetris en modo GPU o CPU según use_gpu."""
     import sys as _sys, time as _t
-    if force_cpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    from pathlib import Path as _P
+
+    if not use_gpu:
+        import os as _os
+        _os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         _sys.modules["cupy"]  = None  # type: ignore[assignment]
         _sys.modules["cupyx"] = None  # type: ignore[assignment]
-    from pathlib import Path as _P
+
     _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
 
+    # tetris debe importarse ANTES de insert_proteins_tetris para que el modo GPU/CPU
+    # lo controle el parámetro use_gpu, no el USE_GPU de insert_proteins_tetris
     import numpy as _np
+    from tetris import Tetris3D, xp, GPU_AVAILABLE
     from image_processing_3d import ImageProcessing3D
     from parser_3d import Parser3D
-    from tetris import Tetris3D, xp
     from insert_proteins_tetris import (
         MEMBRANES_PATH, MEMBRANE_FILES, PROTEINS_LIST,
         VOI_SHAPE, ROOT_PATH, PROTEIN_ISO_THRESHOLD_RATIO, TRIES_CLUSTERING,
@@ -44,14 +48,12 @@ def _tetris_profile_worker(force_cpu: bool, q) -> None:
     )
     import lio
 
-    # Cargar volumen
     if MEMBRANE_FILES:
         mem_vol = lio.load_mrc(str(MEMBRANES_PATH / MEMBRANE_FILES[0])).astype("float32")
     else:
         mem_vol = _np.zeros(VOI_SHAPE, dtype="float32")
     allowed = xp.asarray(~(mem_vol > 0))
 
-    # Cargar proteínas: crop en NumPy, luego subir a GPU
     molecules = []
     for p_path in sorted_proteinSizes(PROTEINS_LIST):
         vol_np, _ = Parser3D.load_protein(str(ROOT_PATH / p_path), str(ROOT_PATH))
@@ -102,7 +104,7 @@ def _tetris_profile_worker(force_cpu: bool, q) -> None:
             occ   = float(tetris.get_occupancy() * 100.0)
             key   = pname.split("/")[-1].split("_")[0]
             _sys.stdout = _real_out
-            label = "CPU" if force_cpu else "GPU"
+            label = "GPU" if GPU_AVAILABLE else "CPU"
             print(f"  [Tetris {label}] {key}  ins={n_ins}  occ={occ:.2f}%")
             _sys.stdout = _Null()
     finally:
@@ -115,7 +117,6 @@ def _tetris_profile_worker(force_cpu: bool, q) -> None:
 # ─── SAWLC worker (nivel de módulo — requerido por multiprocessing.spawn) ─────
 
 def _sawlc_profile_worker(q) -> None:
-    """Corre SAWLC con verbosity=True, envía líneas de progreso por la cola."""
     import sys as _sys, time as _t
     from pathlib import Path as _P
     _sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "tetris_3d"))
@@ -135,6 +136,9 @@ def _sawlc_profile_worker(q) -> None:
         mem_vol = _np.zeros(VOI_SHAPE, dtype="float32")
 
     mem_mask = mem_vol > 0
+    init_occ = 100.0 * float(_np.count_nonzero(mem_mask)) / mem_vol.size
+    q.put(("init", init_occ))
+
     sample   = SyntheticSample(shape=mem_vol.shape, v_size=10, offset=(0, 0, 0))
     voi      = sample._SyntheticSample__voi
     voi[mem_mask] = False
@@ -177,21 +181,30 @@ def _run_sawlc() -> Tuple[Timeline, float]:
 
     timeline: Timeline = []
     total_time = 0.0
+    init_occ = 0.0
     while True:
         msg = q.get()
+        if msg[0] == "init":
+            init_occ = msg[1]
+            continue
         if msg[0] == "done":
             _, total_time, final_occ = msg
-            if not timeline or timeline[-1][1] != final_occ:
+            if not timeline or timeline[-1][1] < final_occ:
                 timeline.append((total_time, final_occ))
             break
         if msg[0] == "line":
             _, line, t = msg
             m = re.search(r"Ocupancia\s+([\d.]+)%", line)
             if m:
-                timeline.append((t, float(m.group(1))))
-                print(f"  [SAWLC] t={t:.1f}s occ={m.group(1)}%")
+                # polnet imprime ocupancia solo de proteínas; sumamos la membrana
+                occ_total = init_occ + float(m.group(1))
+                timeline.append((t, occ_total))
+                print(f"  [SAWLC] t={t:.1f}s occ={occ_total:.2f}%")
 
     p.join()
+    # Añadir punto inicial con la ocupancia de la membrana (igual que Tetris)
+    if init_occ > 0:
+        timeline.insert(0, (0.0, init_occ))
     return timeline, total_time
 
 
@@ -199,7 +212,7 @@ def _run_sawlc() -> Tuple[Timeline, float]:
 
 def _plot(timelines: dict, output_path: Path) -> None:
     colors = {"Tetris GPU": "#9b30f0", "Tetris CPU": "#1f77b4", "SAWLC": "#ff7f0e"}
-    styles = {"Tetris GPU": "-",       "Tetris CPU": "--",       "SAWLC": "-."}
+    styles = {"Tetris GPU": "--",      "Tetris CPU": "--",       "SAWLC": "-."}
 
     fig, ax = plt.subplots(figsize=(12, 5))
     for label, (tl, _) in timelines.items():
@@ -223,35 +236,30 @@ def _plot(timelines: dict, output_path: Path) -> None:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    import sys as _sys
-    _sys.path.insert(0, str(_SRC / "tetris_3d"))
-    from tetris import GPU_AVAILABLE
+def _run_tetris(use_gpu: bool) -> Optional[Tuple[Timeline, float]]:
+    label = "GPU" if use_gpu else "CPU"
+    print(f"\n[PROFILE] Ejecutando Tetris {label}…")
+    ctx = mp.get_context("spawn")
+    q   = ctx.Queue()
+    p   = ctx.Process(target=_tetris_profile_worker, args=(use_gpu, q))
+    p.start(); p.join()
+    if q.empty():
+        return None
+    tl, tt = q.get()
+    return (tl, tt) if tl else None
 
+
+def main() -> None:
     _OUT.mkdir(parents=True, exist_ok=True)
     timelines: dict = {}
 
-    ctx = mp.get_context("spawn")
+    result = _run_tetris(use_gpu=False)
+    if result:
+        timelines["Tetris CPU"] = result
 
-    def _run_tetris(label: str, force_cpu: bool) -> Optional[Tuple[Timeline, float]]:
-        print(f"\n[PROFILE] Ejecutando Tetris {label}…")
-        q = ctx.Queue()
-        p = ctx.Process(target=_tetris_profile_worker, args=(force_cpu, q))
-        p.start(); p.join()
-        tl, tt = q.get()
-        return (tl, tt) if tl else None
-
-    if GPU_AVAILABLE:
-        result = _run_tetris("GPU", force_cpu=False)
-        if result:
-            timelines["Tetris GPU"] = result
-        result = _run_tetris("CPU", force_cpu=True)
-        if result:
-            timelines["Tetris CPU"] = result
-    else:
-        result = _run_tetris("CPU", force_cpu=False)
-        if result:
-            timelines["Tetris CPU"] = result
+    result = _run_tetris(use_gpu=True)
+    if result:
+        timelines["Tetris GPU"] = result
 
     tl, tt = _run_sawlc()
     if tl:
