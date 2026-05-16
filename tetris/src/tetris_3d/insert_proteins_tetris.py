@@ -1,4 +1,4 @@
-USE_GPU = True  # False para forzar CPU
+USE_GPU = False  # False para forzar CPU
 
 import os, sys
 if not USE_GPU:
@@ -97,7 +97,7 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
         vol_cropped = crop_volume(vol, vol.max() * PROTEIN_ISO_THRESHOLD_RATIO)
         molecules.append((os.path.basename(p_path), vol_cropped))
 
-    global_threshold = molecules[0][1].max() * PROTEIN_ISO_THRESHOLD_RATIO
+    global_threshold = min(vol.max() for _, vol in molecules) * PROTEIN_ISO_THRESHOLD_RATIO
     tetris_obj = Tetris3D(dimensions=membrane_volume.shape, threshold=global_threshold)
     tetris_obj.output_volume[~allowed_mask] = 500.0 
 
@@ -105,19 +105,21 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
     per_type_summary = []
     for type_idx, (name, volume) in enumerate(molecules, start=1):
         box_size = max(volume.shape)
+        prot_scale = global_threshold / max(float(volume.max()) * PROTEIN_ISO_THRESHOLD_RATIO, 1e-9)
         inserted_before = total_inserted
         current_target = pick_seed(allowed_mask, tetris_obj.output_volume, global_threshold, box_size)
         if current_target is not None:
             print(f"[!] new seed {current_target}")
         consecutive_failures = 0
-        
+
         while consecutive_failures < TRIES_CLUSTERING:
             if current_target is None: break
             rotated, _ = ImageProcessing3D.randomly_rotate(volume)
+            rotated = rotated * prot_scale
             rotated_bin = ImageProcessing3D.smooth_and_binarize(rotated, 1.5, global_threshold)
             template, _, _ = ImageProcessing3D.create_in_shell(rotated_bin, (0, 2), penalty=100)
-            
-            res = tetris_obj.insert_molecule_3d(template, rotated, name, allowed_mask, current_target, box_size)
+            actual_box_size = max(rotated.shape)
+            res = tetris_obj.insert_molecule_3d(template, rotated, name, allowed_mask, current_target, actual_box_size)
             if res == 'inserted':
                 total_inserted += 1
                 consecutive_failures = 0
@@ -136,7 +138,8 @@ def insert_proteins_in_membrane(membrane_mrc_path, proteins_list, output_dir, me
 
     final = tetris_obj.output_volume.copy()
     final[~allowed_mask] = 0.0
-    combined = final + ((~allowed_mask).astype(np.float32) * (MEMBRANE_INTENSITY_SCALE * final.max()))
+    final = xp.where(final > global_threshold, 200.0, 0.0).astype(xp.float32)
+    combined = final + ((~allowed_mask).astype(np.float32) * (MEMBRANE_INTENSITY_SCALE * 200.0))
     combined_cpu = combined.get() if HAS_GPU else combined
     tomo_idx = Path(membrane_mrc_path).stem.split("_")[-1] if membrane_mrc_path else "empty"
     num_types = len(proteins_list)

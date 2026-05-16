@@ -8,9 +8,162 @@
 
 
 \chapter*{Extended Abstract}
-\addcontentsline{toc}{chapter}{Extended Abstract} %
+\addcontentsline{toc}{chapter}{Extended Abstract}
 
+Cryo-Electron Tomography (cryo-ET) is a structural biology imaging technique that enables the
+three-dimensional reconstruction of biological specimens—such as individual proteins, protein
+complexes, and intact cells—at near-native conditions and nanometric resolution. Unlike classical
+structural methods such as X-ray crystallography or Nuclear Magnetic Resonance, cryo-ET does not
+require sample crystallisation or chemical fixation; instead, specimens are rapidly vitrified in
+liquid ethane to prevent ice crystal formation, preserving their native hydrated structure. During
+acquisition, the electron beam traverses the sample at a series of tilt angles, typically ranging
+from $-60°$ to $+60°$, and the resulting 2D projection images are computationally back-projected
+and filtered to reconstruct a 3D density map known as a tomogram. Each voxel in the tomogram
+encodes a local scattering density, which correlates with the distribution of atomic mass in the
+corresponding region of the sample. Cryo-ET has become an indispensable tool in structural cell
+biology for studying macromolecular machines, membrane architecture, and organelle organisation
+in their cellular context.
 
-Resumen extendido en inglés bajo el título “Extended Abstract”. Este apartado se situará tras el apartado “Resumen” y tendrá una extensión mínima de 2000 palabras.
+The automated analysis of cryo-ET data has benefited enormously from deep learning methods over
+the past decade. Convolutional neural networks and related architectures have been applied to tasks
+such as tomogram denoising, organelle segmentation, sub-tomogram classification, and particle
+picking. These supervised approaches, however, require large annotated training datasets: volumes
+in which each voxel or region is labelled with its biological identity. Generating such ground-truth
+labels experimentally is extraordinarily tedious and relies on expert manual curation, which
+severely limits the scale at which labelled data can be produced. This data scarcity problem is
+one of the primary bottlenecks in the application of deep learning to cryo-ET.
 
- 
+A well-established strategy to overcome this limitation is the generation of \textbf{synthetic
+tomograms}: computationally produced volumes that simulate the physical image-formation process
+of the electron microscope, including the projection geometry, the contrast transfer function,
+missing-wedge artefacts arising from the limited tilt range, and realistic noise models.
+When synthetic data is sufficiently faithful to experimental observations, networks trained on it
+can generalise to real tomograms, reducing the need for manual annotation. The fidelity of
+synthetic data depends critically on how realistically it reproduces the spatial distribution
+and density of macromolecules within the simulation volume.
+
+\textit{PolNet} is an open-source Python framework specifically designed for the generation of
+synthetic cryo-ET datasets. It provides a modular simulation pipeline that models lipid membranes,
+transmembrane protein complexes, and cytoplasmic macromolecular assemblies, ultimately producing
+synthetic tomograms together with their ground-truth segmentation masks. The protein insertion
+module of PolNet is based on \textit{SAWLC} (Surface Aware Walk from Last Coordinate), a stochastic
+placement strategy in which each new protein is seeded near the surface of the most recently
+inserted molecule. This surface-aware approach produces spatially clustered distributions that
+resemble the crowded, heterogeneous organisation observed in real cells. Despite its biological
+motivation, SAWLC is computationally demanding: the sequential nature of the placement process,
+combined with high rejection rates in dense volumes, means that generating a single tomogram with
+thousands of macromolecules can require several hours of CPU computation. This throughput limitation
+restricts the scale at which synthetic datasets can be produced and motivates the investigation of
+more efficient protein insertion strategies.
+
+The present Bachelor's Thesis addresses this bottleneck by designing, implementing, and
+benchmarking \textbf{Tetris~3D}, a novel protein insertion algorithm that uses three-dimensional
+FFT-based cross-correlation to determine, at each step, the optimal position for placing a new
+macromolecule within the simulation volume. The algorithm is developed and evaluated in an
+independent repository with the explicit goal of comparing its performance against SAWLC and
+assessing whether it constitutes a viable replacement for the insertion module of PolNet.
+
+The core idea behind Tetris~3D is to reframe protein placement as an optimisation problem over
+the space of all geometrically valid positions within a local search region. Given the current
+state of the output volume and a new protein density map, the algorithm first extracts a local
+bounding box around a randomly sampled seed coordinate. Within this bounding box, a binary
+occupancy map is constructed by thresholding the existing density at an isosurface value derived
+from the protein's own maximum intensity. A shell template is then generated by morphologically
+dilating the binary protein mask and subtracting the protein itself: the resulting shell encodes
+the ideal contact zone where a new protein should be placed to fit tightly against its neighbours
+without overlapping. The three-dimensional cross-correlation between this shell template and the
+binary occupancy map is computed using the Fast Fourier Transform (FFT), producing a score map
+in which high values indicate positions where the new protein would make close contact with
+existing structure. The position with the maximum valid score—subject to boundary constraints
+and strict non-overlap verification—is selected, and the protein density is added to the output
+volume at that location.
+
+This formulation has two important consequences. First, each insertion finds the \textit{globally
+best} valid position within the search region, rather than accepting the first non-overlapping
+candidate discovered by random sampling. This leads to denser packing: proteins are placed in
+a manner that minimises wasted interstitial space, achieving higher volumetric occupancy at the
+end of the simulation. Second, the FFT-based score computation evaluates all candidate positions
+simultaneously in $\mathcal{O}(N \log N)$ time, where $N$ is the number of voxels in the
+bounding box, rather than requiring a separate overlap check for each candidate. This is
+fundamentally more efficient than the iterative random-walk approach of SAWLC.
+
+A GPU-accelerated variant of Tetris~3D was also developed using the \textit{CuPy} library,
+which provides a NumPy-compatible API for array operations on NVIDIA graphics processing units.
+The straightforward approach of porting the algorithm to CuPy is not sufficient to achieve
+optimal GPU utilisation, however, because the native overlap validation loop requires repeated
+synchronisation between the host (CPU) and the device (GPU) to evaluate each candidate position.
+Each synchronisation stalls the GPU pipeline and incurs significant latency. To address this,
+the GPU implementation adopts a \textbf{two-FFT strategy}: a second cross-correlation is computed
+between the binary occupancy map and the binary protein mask, producing an overlap map that
+simultaneously encodes, for every position in the bounding box, the degree of voxel overlap
+between the candidate placement and the existing structure. By combining the shell-correlation
+score map with this overlap map using vectorised boolean masking, all invalid positions are
+eliminated in a single GPU kernel without any loop. The position with the maximum remaining
+score is then retrieved with a single host-device data transfer per insertion, regardless of
+the size of the bounding box. This reduces the number of GPU–CPU synchronisation points from
+up to $\mathcal{O}(50)$ per insertion to exactly one, dramatically improving GPU pipeline
+throughput and delivering substantial speedup over both the CPU variant and SAWLC.
+
+To evaluate Tetris~3D systematically, a benchmarking suite was designed comprising three
+complementary scripts. The first, \texttt{plot\_comparison.py}, runs complete simulations with
+all eleven protein types for each of the three algorithm variants (Tetris CPU, Tetris GPU, and
+SAWLC) and generates comparative visualisations of volumetric occupancy, cumulative execution
+time, monomer population per protein type, and insertion throughput. The second script,
+\texttt{profile\_comparison.py}, produces occupancy-vs-time curves that show how quickly each
+algorithm fills the available volume over the course of a full simulation. The third,
+\texttt{profile\_test.py}, instruments the Tetris algorithm with fine-grained timers to decompose
+the total execution time into its constituent phases: seed selection, random rotation, binary
+template construction, FFT cross-correlation, and overlap validation. This decomposition
+identifies where time is actually spent and guides further optimisation efforts.
+
+All simulations share the same experimental configuration: eleven protein types at 10~Å
+resolution, the same membrane volume derived from a real cryo-ET tomogram, and identical
+placement parameters including the isosurface threshold ratio and the maximum number of
+consecutive failures before moving to the next protein type. Each algorithm runs in an isolated
+subprocess spawned with Python's \texttt{multiprocessing} module using the \texttt{spawn}
+start method, ensuring a clean import environment. Results are serialised to a JSON cache file
+so that visualisations can be regenerated without repeating the time-consuming simulations.
+
+The preliminary results of this comparative study confirm the expected benefits of the Tetris~3D
+approach. Across all simulated scenarios, Tetris~3D achieves higher volumetric occupancy than
+SAWLC at the end of a full simulation run. The FFT-guided placement strategy packs proteins more
+efficiently because it actively selects the contact position that maximises adjacency to existing
+structure, whereas SAWLC's random walk may leave isolated free-volume pockets that are too
+narrow to accommodate any remaining protein. This difference in packing quality is particularly
+pronounced for smaller proteins, which can fill residual interstitial space that larger molecules
+cannot access: the Tetris~3D algorithm inserts substantially more monomers of small proteins than
+SAWLC, contributing more to the final volumetric occupancy.
+
+In terms of execution time and throughput, the GPU variant of Tetris~3D delivers the best
+performance. By eliminating the sequential overlap-checking loop and replacing it with fully
+vectorised GPU computation, the two-FFT optimisation achieves near-constant cost per insertion
+independent of the current density of the volume. This is in contrast to the CPU and SAWLC
+implementations, where the cost per insertion tends to increase as the volume becomes denser
+and more candidate positions need to be rejected. As a consequence, the performance advantage of
+Tetris~3D GPU over SAWLC grows as the simulation progresses. The CPU variant of Tetris~3D also
+outperforms SAWLC in throughput, because the FFT cross-correlation evaluates all positions in
+a single pass rather than through repeated random sampling.
+
+It is important to acknowledge that the two algorithms reflect different biological priorities.
+SAWLC is designed to reproduce the spatial clustering patterns observed in real cells, where
+proteins are not uniformly distributed but tend to aggregate near membrane surfaces or form
+oligomeric assemblies. Tetris~3D, in its current form, optimises for volumetric packing
+efficiency rather than for biological realism in the spatial distribution. This trade-off should
+be considered when choosing between the two algorithms for a given simulation goal: if the
+primary objective is to generate dense synthetic tomograms for training detection or segmentation
+networks, Tetris~3D is the more appropriate choice; if the goal is to reproduce specific spatial
+statistics of macromolecular distributions, SAWLC may better capture those features.
+
+In conclusion, this work demonstrates that Tetris~3D is a computationally efficient alternative
+to SAWLC for protein insertion in synthetic cryo-ET tomogram generation. The algorithm achieves
+higher packing densities and shorter runtimes through FFT-based global optimisation and
+GPU-accelerated vectorised computation, positioning it as a strong candidate for replacing the
+SAWLC module in PolNet pipelines where throughput and dataset scale are the primary concerns.
+Future work will focus on incorporating biologically motivated spatial constraints into the
+algorithm—for example, surface-proximate seeding similar to SAWLC—to improve the realism of
+the generated distributions while retaining the computational advantages of the FFT-based
+placement strategy. Further directions include extending the algorithm to handle elongated
+filamentous assemblies, conducting a larger-scale evaluation across diverse tomogram geometries
+and protein libraries, and exploring the use of Tetris~3D as a pre-processing step that
+initialises SAWLC simulations with a dense uniform packing before applying surface-aware
+refinement.

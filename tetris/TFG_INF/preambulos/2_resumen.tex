@@ -8,6 +8,41 @@
 
 
 \chapter*{Resumen}
-\addcontentsline{toc}{chapter}{Resumen} %
+\addcontentsline{toc}{chapter}{Resumen}
 
-Aqui ira el resumen en del TFG
+La crio-microscopía electrónica de tomografía (\textit{cryo-ET}) es una técnica de imagen de alta
+resolución que permite estudiar la organización tridimensional de macromoléculas en su entorno
+celular nativo, sin necesidad de cristalización ni tinción. Mediante la adquisición de
+proyecciones 2D desde distintos ángulos de inclinación y su posterior reconstrucción
+computacional, se obtienen tomogramas 3D que revelan la arquitectura interna de células y tejidos
+a escala nanométrica. El análisis automatizado de estos tomogramas mediante redes neuronales
+profundas requiere grandes volúmenes de datos de entrenamiento etiquetados, cuya obtención
+experimental es costosa y laboriosa. Una alternativa consolidada es la generación de
+\textbf{tomogramas sintéticos}: volúmenes simulados con distribuciones realistas de proteínas,
+membranas y ruido, que reproducen las características estadísticas de los datos reales.
+
+En este contexto se enmarca \textit{PolNet}, un marco de simulación de tomogramas sintéticos que
+incorpora el módulo \textit{SAWLC} (\textit{Surface Aware Walk from Last Coordinate}) para la
+inserción estocástica de proteínas en el volumen de interés. Aunque SAWLC produce distribuciones
+biológicamente plausibles, su rendimiento computacional limita su aplicabilidad cuando se
+requieren grandes colecciones de datos de entrenamiento o se trabaja con proteínas de gran tamaño.
+
+El presente Trabajo Fin de Grado aborda el diseño, implementación y evaluación de un algoritmo
+alternativo de inserción de proteínas denominado \textbf{Tetris~3D}, desarrollado en un repositorio
+independiente con el objetivo de compararlo frente a SAWLC y valorar su viabilidad como reemplazo.
+Tetris~3D emplea correlación cruzada 3D basada en la transformada de Fourier rápida (FFT) para
+identificar, en cada paso, la posición óptima de inserción de una proteína respecto a las ya
+colocadas, promoviendo un empaquetamiento denso y espacialmente coherente. Además, se desarrolla
+una versión acelerada por GPU mediante la biblioteca \textit{CuPy}, que paraleliza los cálculos de
+correlación sobre la tarjeta gráfica, reduciendo significativamente los tiempos de ejecución.
+
+Los principales objetivos del trabajo son: (i)~implementar el algoritmo Tetris~3D,
+(ii)~desarrollar su versión GPU con una sincronización mínima entre host y dispositivo,
+(iii)~diseñar un banco de pruebas que evalúe el rendimiento frente a SAWLC en términos de
+ocupancia volumétrica, número de monómeros insertados y tiempo de ejecución, y (iv)~analizar el
+impacto de la aceleración GPU sobre dichas métricas.
+
+Los resultados obtenidos muestran que Tetris~3D logra una ocupancia volumétrica superior a la de
+SAWLC en igualdad de condiciones, con tiempos de ejecución sensiblemente menores gracias a la
+versión GPU, lo que lo posiciona como una alternativa competitiva para la generación eficiente
+de datos sintéticos en cryo-ET.

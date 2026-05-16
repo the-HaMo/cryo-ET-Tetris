@@ -19,7 +19,7 @@ try:
 except ImportError:
     print("[WARN] PyFFTW no instalado. Correlación 3D usará 1 solo hilo.")
 
-# GPU detection 
+# GPU detection
 try:
     import cupy as cp
     import cupyx.scipy.ndimage as ndi_gpu
@@ -41,24 +41,30 @@ class ImageProcessing3D:
     def randomly_rotate(data: np.ndarray, angles: Tuple[float, float, float] = None):
         if angles is None:
             angles = np.random.uniform(0, 360, size=3)
-        
+
+        # Pad enough so any 3D rotation fits without clipping
+        pad = int(np.ceil(max(data.shape) * (np.sqrt(3) - 1) / 2)) + 1
+        data_padded = np.pad(data, pad, mode='constant', constant_values=0.0)
+
         rotation = R.from_euler('zyx', angles, degrees=True)
         matrix = rotation.as_matrix()
-        center = np.array(data.shape) / 2.0
+        center = np.array(data_padded.shape) / 2.0
         offset = center - np.dot(matrix, center)
 
-        # Si hay GPU, convertimos los parámetros a CuPy para evitar el ValueError
-        device_data = xp.asarray(data)
-        device_matrix = xp.asarray(matrix)
-        device_offset = xp.asarray(offset)
-
-        # Usamos 'ndi' que apunta al backend detectado (SciPy o CuPy)
         rotated = ndi.affine_transform(
-            device_data, device_matrix, offset=device_offset, 
+            xp.asarray(data_padded), xp.asarray(matrix), offset=xp.asarray(offset),
             order=1, mode='constant', cval=0.0
         )
-        return rotated, tuple(angles)
-    
+
+        # Crop to tight non-zero bounding box so returned shape is minimal
+        rotated_np = rotated.get() if GPU_AVAILABLE else np.asarray(rotated)
+        coords = np.argwhere(rotated_np > 1e-6)
+        if coords.size == 0:
+            return rotated, tuple(angles)
+        z0, y0, x0 = coords.min(axis=0)
+        z1, y1, x1 = coords.max(axis=0) + 1
+        return rotated[z0:z1, y0:y1, x0:x1], tuple(angles)
+
     @staticmethod
     def smooth_and_binarize(data, sigma: float = 1.5, threshold: float = 50):
         if sigma > 0:
@@ -87,7 +93,6 @@ class ImageProcessing3D:
         # Cáscara: puntos donde queremos que haya densidad (correlación positiva)
         shell_mask = np.logical_and(outer_layer > 0, ~(inner_layer > 0))
         template[shell_mask] = 1.0
-        # Núcleo: puntos de choque prohibido (penalización negativa)
         template[inner_layer > 0] = -penalty
         return template
 

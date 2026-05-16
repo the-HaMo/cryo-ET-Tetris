@@ -202,7 +202,7 @@ Esta fase se centró en adaptar el algoritmo Tetris al \textit{framework} PolNet
         t_{\textit{insert\_validation}} = t_{\textit{insert\_molecule\_3d}} - t_{\textit{fft\_correlation}}
     \end{equation}
 
-    El experimento se realizó sobre un volumen de $500\times500\times250$ vóxeles con la proteína \textit{2uv8\_10A.pns}, alcanzando un grado de ocupancia del \textbf{32\%} con \textbf{2\,552 monómeros insertados} en un tiempo total de \textbf{318.05\,s}. La Figura~\ref{fig:profile-breakdown} muestra la curva de ocupancia frente al tiempo, con el área bajo la curva coloreada según la etapa dominante en cada tramo.
+    El experimento se realizó sobre un volumen de $500\times500\times250$ vóxeles con la proteína \textit{2uv8\_10A.pns}, alcanzando un grado de ocupancia del \textbf{32\%} con \textbf{2\,552 monómeros insertados} en un tiempo total de \textbf{191.84\,s}. La Figura~\ref{fig:profile-breakdown} muestra la curva de ocupancia frente al tiempo, con el área bajo la curva coloreada según la etapa dominante en cada tramo.
 
     \begin{figure}[H]
         \centering
@@ -211,7 +211,7 @@ Esta fase se centró en adaptar el algoritmo Tetris al \textit{framework} PolNet
         \label{fig:profile-breakdown}
     \end{figure}
 
-    Los resultados, resumidos en la Tabla~\ref{tab:profile}, revelan que el cuello de botella principal es la función \texttt{pick\_seed} (\textbf{34.1\%}), seguida por la correlación FFT 3D (\textbf{27.0\%}) y la validación e inserción (\textbf{19.1\%}), que juntas componen el método \texttt{insert\_molecule\_3d}. Las operaciones de generación de \textit{in-shell} y rotación afín resultan prácticamente despreciables ($<2\%$ combinadas).
+    Los resultados, resumidos en la Tabla~\ref{tab:profile}, revelan que el cuello de botella principal es la función \texttt{pick\_seed} (\textbf{62.1\%}), seguida por la correlación FFT 3D (\textbf{14.1\%}) y la validación e inserción (\textbf{12.0\%}), que juntas componen el método \texttt{insert\_molecule\_3d}. Las operaciones de generación de \textit{in-shell} y rotación afín resultan prácticamente despreciables ($<2\%$ combinadas).
 
     \begin{table}[H]
     \centering
@@ -219,14 +219,14 @@ Esta fase se centró en adaptar el algoritmo Tetris al \textit{framework} PolNet
     \hline
     \textbf{Operación} & \textbf{Tiempo (s)} & \textbf{Porcentaje} \\
     \hline
-    Selección de semilla (\texttt{pick\_seed}) & 108.55 & 34.1\% \\
-    Correlación FFT 3D & 85.87 & 27.0\% \\
-    Validación e inserción & 60.75 & 19.1\% \\
-    Otros (Python, I/O) & 55.67 & 17.5\% \\
-    Generación \textit{in-shell} & 4.13 & 1.3\% \\
-    Rotación afín & 3.18 & 1.0\% \\
+    Selección de semilla (\texttt{pick\_seed}) & 119.10 & 62.1\% \\
+    Correlación FFT 3D & 27.06 & 14.1\% \\
+    Validación e inserción & 23.02 & 12.0\% \\
+    Otros (Python, I/O) & 20.16 & 10.5\% \\
+    Generación \textit{in-shell} & 1.48 & 0.8\% \\
+    Rotación afín & 1.12 & 0.6\% \\
     \hline
-    \textbf{Total} & \textbf{318.05} & \textbf{100\%} \\
+    \textbf{Total} & \textbf{191.84} & \textbf{100\%} \\
     \hline
     \end{tabular}
     \caption{Desglose del tiempo de ejecución de la implementación adaptada por operación (ejecución en CPU, volumen $500\times500\times250$, proteína \textit{2uv8\_10A.pns}, 32\% de ocupancia).}
@@ -255,6 +255,39 @@ Una vez verificada la corrección lógica de la implementación adaptada, se pro
     \item \textbf{Minimización de transferencias de memoria}: Las transferencias entre memoria principal (CPU) y memoria de la GPU son un cuello de botella conocido en computación heterogénea. Se optimizó el flujo para que cada operación GPU reciba datos NumPy, los convierta a \texttt{cupy.ndarray}, ejecute el cálculo en GPU, y devuelva el resultado de nuevo a NumPy, evitando transferencias intermedias innecesarias.
 
     \item \textbf{Validación de equivalencia numérica}: Se verificó que las salidas de las rutas CPU y GPU son numéricamente equivalentes (diferencias inferiores a $10^{-6}$ debido a precisión de punto flotante), garantizando que la aceleración no introduce errores algorítmicos.
+
+    \item \textbf{Análisis de rendimiento de la implementación GPU}: Bajo las mismas condiciones experimentales del perfilado CPU (volumen $500\times500\times250$, proteína \textit{2uv8\_10A.pns}, 32\% de ocupancia), se midió el tiempo de ejecución de la implementación GPU con el mismo script \texttt{profile\_test.py} instrumentado. Los resultados se recogen en la Tabla~\ref{tab:profile-gpu}.
+
+    \begin{table}[H]
+    \centering
+    \begin{tabular}{|l|r|r|r|r|}
+    \hline
+    \textbf{Operación} & \textbf{CPU (s)} & \textbf{CPU (\%)} & \textbf{GPU (s)} & \textbf{GPU (\%)} \\
+    \hline
+    Selección de semilla (\texttt{pick\_seed}) & 119.10 & 62.1\% & 0.54  &  0.7\% \\
+    Correlación FFT 3D                         &  27.06 & 14.1\% & 0.62  &  0.8\% \\
+    Validación e inserción                     &  23.02 & 12.0\% & 41.36 & 52.3\% \\
+    Otros (Python, I/O)                        &  20.16 & 10.5\% & 35.06 & 44.4\% \\
+    Generación \textit{in-shell}               &   1.48 &  0.8\% &  1.12 &  1.4\% \\
+    Rotación afín                              &   1.12 &  0.6\% &  0.34 &  0.4\% \\
+    \hline
+    \textbf{Total}                             & \textbf{191.84} & \textbf{100\%} & \textbf{79.04} & \textbf{100\%} \\
+    \hline
+    \end{tabular}
+    \caption{Comparación del desglose de tiempo de ejecución entre las implementaciones CPU y GPU (volumen $500\times500\times250$, proteína \textit{2uv8\_10A.pns}, 32\% de ocupancia). La GPU fue una NVIDIA RTX 4090.}
+    \label{tab:profile-gpu}
+    \end{table}
+
+    La Figura~\ref{fig:profile-breakdown-gpu} muestra la curva de ocupancia frente al tiempo para la ejecución GPU, coloreada por etapa dominante, análoga a la Figura~\ref{fig:profile-breakdown} del perfil CPU.
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=1\textwidth]{archivos/profile_occupancy_breakdown-gpu.png}
+        \caption{Desglose del tiempo de ejecución por etapa de la implementación GPU del algoritmo Tetris. El área coloreada bajo la curva de ocupancia indica el tiempo acumulado de cada operación (experimento: volumen $500\times500\times250$, proteína \textit{2uv8\_10A.pns}, 32\% de ocupancia, NVIDIA RTX 4090).}
+        \label{fig:profile-breakdown-gpu}
+    \end{figure}
+
+    Los resultados confirman una aceleración global de $\times$\textbf{2.43} (191.84\,s $\to$ 79.04\,s). El beneficio más notable es la eliminación práctica de los dos cuellos de botella originales: \texttt{pick\_seed} pasa de 119.10\,s (62.1\%) a 0.54\,s (0.7\%) gracias al \texttt{argwhere} paralelo de \texttt{CuPy}, y la correlación FFT 3D se reduce de 27.06\,s (14.1\%) a 0.62\,s (0.8\%) mediante \texttt{cupyx.scipy.signal.fftconvolve}. El tiempo restante —validación e inserción (41.36\,s) y otros (35.06\,s)— constituye el piso de tiempo de ejecución inherente al algoritmo: son operaciones de control secuencial, comprobaciones de colisión y gestión del estado interno que no son paralelizables y cuyo coste es equivalente al de la I/O en sistemas convencionales. Este suelo no es reducible mediante aceleración hardware adicional sin un rediseño algorítmico profundo, por lo que la implementación GPU puede considerarse próxima al límite de rendimiento alcanzable con la arquitectura actual.
 \end{enumerate}
 
 \subsection{Fase 5: Evaluación experimental comparativa}
