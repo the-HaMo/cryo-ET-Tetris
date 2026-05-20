@@ -1,4 +1,4 @@
-# Tetris — FFT-Based Protein Insertion for Synthetic Cryo-ET Tomograms
+# Tetris — Protein Insertion for Synthetic Cryo-ET Tomograms
 
 This repository contains the implementation, benchmarking suite, and evaluation scripts for **Tetris**, a protein insertion algorithm developed as part of a Bachelor's Thesis at the Universidad de Murcia (Facultad de Informática).
 
